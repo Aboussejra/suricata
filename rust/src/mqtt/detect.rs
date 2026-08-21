@@ -21,7 +21,7 @@ use crate::core::{STREAM_TOCLIENT, STREAM_TOSERVER};
 use crate::detect::uint::{
     detect_match_uint, detect_parse_array_uint_enum, detect_parse_uint_bitflags,
     detect_uint_match_at_index, DetectBitflagModifier, DetectUintArrayData, DetectUintData,
-    SCDetectU8Free, SCDetectU8Parse,
+    DetectUintIndex, SCDetectU8ArrayFree, SCDetectU8ArrayParse, SCDetectU8Free, SCDetectU8Parse,
 };
 use crate::detect::{
     helper_keyword_register_multi_buffer, helper_keyword_register_sticky_buffer,
@@ -30,9 +30,10 @@ use crate::detect::{
 };
 use suricata_sys::sys::{
     DetectEngineCtx, DetectEngineThreadCtx, Flow, SCDetectBufferSetActiveList,
-    SCDetectHelperBufferMpmRegister, SCDetectHelperBufferRegister, SCDetectHelperKeywordRegister,
-    SCDetectHelperMultiBufferMpmRegister, SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList,
-    SCSigTableAppLiteElmt, SigMatchCtx, Signature,
+    SCDetectHelperBufferMpmRegister, SCDetectHelperBufferProgressRegister,
+    SCDetectHelperKeywordRegister, SCDetectHelperMultiBufferMpmRegister,
+    SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList, SCSigTableAppLiteElmt, SigMatchCtx,
+    Signature,
 };
 
 use super::mqtt::{MQTTState, MQTTTransaction, ALPROTO_MQTT};
@@ -216,62 +217,6 @@ unsafe extern "C" fn mqtt_pub_msg_get_data(
     return false;
 }
 
-fn mqtt_tx_get_reason_code(tx: &MQTTTransaction) -> Option<u8> {
-    for msg in tx.msg.iter() {
-        match msg.op {
-            MQTTOperation::PUBACK(ref v)
-            | MQTTOperation::PUBREL(ref v)
-            | MQTTOperation::PUBREC(ref v)
-            | MQTTOperation::PUBCOMP(ref v) => {
-                if let Some(rcode) = v.reason_code {
-                    return Some(rcode);
-                }
-            }
-            MQTTOperation::AUTH(ref v) => {
-                return Some(v.reason_code);
-            }
-            MQTTOperation::CONNACK(ref v) => {
-                return Some(v.return_code);
-            }
-            MQTTOperation::DISCONNECT(ref v) => {
-                if let Some(rcode) = v.reason_code {
-                    return Some(rcode);
-                }
-            }
-            _ => {}
-        }
-    }
-    return None;
-}
-
-fn mqtt_tx_suback_unsuback_has_reason_code(
-    tx: &MQTTTransaction, code: &DetectUintData<u8>,
-) -> c_int {
-    for msg in tx.msg.iter() {
-        match msg.op {
-            MQTTOperation::UNSUBACK(ref unsuback) => {
-                if let Some(ref reason_codes) = unsuback.reason_codes {
-                    for rc in reason_codes.iter() {
-                        if detect_match_uint(code, *rc) {
-                            return 1;
-                        }
-                    }
-                }
-            }
-            MQTTOperation::SUBACK(ref suback) => {
-                // in SUBACK these are stored as "QOS granted" historically
-                for rc in suback.qoss.iter() {
-                    if detect_match_uint(code, *rc) {
-                        return 1;
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    return 0;
-}
-
 static mut UNSUB_TOPIC_MATCH_LIMIT: isize = 100;
 static mut G_MQTT_UNSUB_TOPIC_BUFFER_ID: c_int = 0;
 static mut G_MQTT_TYPE_KW_ID: u16 = 0;
@@ -440,7 +385,7 @@ unsafe extern "C" fn mqtt_reason_code_setup(
     if SCDetectSignatureSetAppProto(s, ALPROTO_MQTT) != 0 {
         return -1;
     }
-    let ctx = SCDetectU8Parse(raw) as *mut c_void;
+    let ctx = SCDetectU8ArrayParse(raw) as *mut c_void;
     if ctx.is_null() {
         return -1;
     }
@@ -464,19 +409,81 @@ unsafe extern "C" fn mqtt_reason_code_match(
     tx: *mut c_void, _sig: *const Signature, ctx: *const SigMatchCtx,
 ) -> c_int {
     let tx = cast_pointer!(tx, MQTTTransaction);
-    let ctx = cast_pointer!(ctx, DetectUintData<u8>);
-    if let Some(v) = mqtt_tx_get_reason_code(tx) {
-        if detect_match_uint(ctx, v) {
-            return 1;
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u8>);
+    let mut vals = Vec::new();
+    for msg in tx.msg.iter() {
+        match msg.op {
+            MQTTOperation::PUBACK(ref v)
+            | MQTTOperation::PUBREL(ref v)
+            | MQTTOperation::PUBREC(ref v)
+            | MQTTOperation::PUBCOMP(ref v) => {
+                if let Some(rcode) = v.reason_code {
+                    if ctx.index != DetectUintIndex::Any {
+                        vals.push(rcode);
+                    } else if detect_match_uint(&ctx.du, rcode) {
+                        return 1;
+                    }
+                }
+            }
+            MQTTOperation::AUTH(ref v) => {
+                if ctx.index != DetectUintIndex::Any {
+                    vals.push(v.reason_code);
+                } else if detect_match_uint(&ctx.du, v.reason_code) {
+                    return 1;
+                }
+            }
+            MQTTOperation::CONNACK(ref v) => {
+                if ctx.index != DetectUintIndex::Any {
+                    vals.push(v.return_code);
+                } else if detect_match_uint(&ctx.du, v.return_code) {
+                    return 1;
+                }
+            }
+            MQTTOperation::DISCONNECT(ref v) => {
+                if let Some(rcode) = v.reason_code {
+                    if ctx.index != DetectUintIndex::Any {
+                        vals.push(rcode);
+                    } else if detect_match_uint(&ctx.du, rcode) {
+                        return 1;
+                    }
+                }
+            }
+            MQTTOperation::UNSUBACK(ref unsuback) => {
+                if let Some(ref reason_codes) = unsuback.reason_codes {
+                    for rc in reason_codes.iter() {
+                        if ctx.index != DetectUintIndex::Any {
+                            vals.push(*rc);
+                        } else if detect_match_uint(&ctx.du, *rc) {
+                            return 1;
+                        }
+                    }
+                }
+            }
+            MQTTOperation::SUBACK(ref suback) => {
+                // in SUBACK these are stored as "QOS granted" historically
+                for rc in suback.qoss.iter() {
+                    if ctx.index != DetectUintIndex::Any {
+                        vals.push(*rc);
+                    } else if detect_match_uint(&ctx.du, *rc) {
+                        return 1;
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    return mqtt_tx_suback_unsuback_has_reason_code(tx, ctx);
+
+    if ctx.index != DetectUintIndex::Any {
+        return detect_uint_match_at_index::<u8, u8>(&vals, ctx, |v| Some(*v), tx.complete);
+    } else {
+        return 0;
+    }
 }
 
 unsafe extern "C" fn mqtt_reason_code_free(_de: *mut DetectEngineCtx, ctx: *mut c_void) {
     // Just unbox...
-    let ctx = cast_pointer!(ctx, DetectUintData<u8>);
-    SCDetectU8Free(ctx);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u8>);
+    SCDetectU8ArrayFree(ctx);
 }
 
 unsafe extern "C" fn mqtt_parse_qos(ustr: *const std::os::raw::c_char) -> *mut u8 {
@@ -934,10 +941,11 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_MULTI_UINT | SIGMATCH_INFO_ENUM_UINT,
     };
     G_MQTT_TYPE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_TYPE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_TYPE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.type\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
 
     let keyword_name = b"mqtt.subscribe.topic\0".as_ptr() as *const libc::c_char;
@@ -974,10 +982,11 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_MULTI_UINT,
     };
     G_MQTT_REASON_CODE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_REASON_CODE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_REASON_CODE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.reason_code\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"mqtt.connack.session_present\0".as_ptr() as *const libc::c_char,
@@ -990,10 +999,11 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         flags: 0,
     };
     G_MQTT_CONNACK_SESSIONPRESENT_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_CONNACK_SESSIONPRESENT_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_CONNACK_SESSIONPRESENT_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.connack.session_present\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"mqtt.qos\0".as_ptr() as *const libc::c_char,
@@ -1006,15 +1016,16 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         flags: 0,
     };
     G_MQTT_QOS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_QOS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_QOS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.qos\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOSERVER,
+        0,
     );
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.publish.topic"),
         desc: String::from("sticky buffer to match on the MQTT PUBLISH topic"),
-        url: String::from("mqtt-keywords.html#mqtt-publish-topic"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-publish-topic"),
         setup: mqtt_pub_topic_setup,
     };
     let _g_mqtt_pub_topic_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1028,7 +1039,7 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.publish.message"),
         desc: String::from("sticky buffer to match on the MQTT PUBLISH message"),
-        url: String::from("mqtt-keywords.html#mqtt-publish-message"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-publish-message"),
         setup: mqtt_pub_msg_setup,
     };
     let _g_mqtt_pub_msg_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1049,10 +1060,11 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         flags: SIGMATCH_INFO_UINT8,
     };
     G_MQTT_PROTOCOL_VERSION_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_PROTOCOL_VERSION_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_PROTOCOL_VERSION_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.protocol_version\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOSERVER,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"mqtt.flags\0".as_ptr() as *const libc::c_char,
@@ -1061,13 +1073,14 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         AppLayerTxMatch: Some(mqtt_flags_match),
         Setup: Some(mqtt_flags_setup),
         Free: Some(mqtt_flags_free),
-        flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_MULTI_UINT | SIGMATCH_INFO_BITFLAGS_UINT,
+        flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_BITFLAGS_UINT,
     };
     G_MQTT_FLAGS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_FLAGS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_FLAGS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.flags\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOSERVER,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"mqtt.connect.flags\0".as_ptr() as *const libc::c_char,
@@ -1076,18 +1089,19 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
         AppLayerTxMatch: Some(mqtt_conn_flags_match),
         Setup: Some(mqtt_conn_flags_setup),
         Free: Some(mqtt_conn_flags_free),
-        flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_MULTI_UINT | SIGMATCH_INFO_BITFLAGS_UINT,
+        flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_BITFLAGS_UINT,
     };
     G_MQTT_CONN_FLAGS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_MQTT_CONN_FLAGS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_MQTT_CONN_FLAGS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"mqtt.connect.flags\0".as_ptr() as *const libc::c_char,
         ALPROTO_MQTT,
         STREAM_TOSERVER,
+        0,
     );
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.connect.willtopic"),
         desc: String::from("sticky buffer to match on the MQTT CONNECT will topic"),
-        url: String::from("mqtt-keywords.html#mqtt-connect-willtopic"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-connect-willtopic"),
         setup: mqtt_conn_willtopic_setup,
     };
     let _g_mqtt_conn_willtopic_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1101,7 +1115,7 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.connect.willmessage"),
         desc: String::from("sticky buffer to match on the MQTT CONNECT will message"),
-        url: String::from("mqtt-keywords.html#mqtt-connect-willmessage"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-connect-willmessage"),
         setup: mqtt_conn_willmsg_setup,
     };
     let _g_mqtt_conn_willmsg_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1115,7 +1129,7 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.connect.username"),
         desc: String::from("sticky buffer to match on the MQTT CONNECT username"),
-        url: String::from("mqtt-keywords.html#mqtt-connect-username"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-connect-username"),
         setup: mqtt_conn_username_setup,
     };
     let _g_mqtt_conn_username_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1129,7 +1143,7 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.connect.protocol_string"),
         desc: String::from("sticky buffer to match on the MQTT CONNECT protocol string"),
-        url: String::from("mqtt-keywords.html#mqtt-connect-protocol_string"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-connect-protocol-string"),
         setup: mqtt_conn_protocolstring_setup,
     };
     let _g_mqtt_conn_protostr_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1143,7 +1157,7 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.connect.password"),
         desc: String::from("sticky buffer to match on the MQTT CONNECT password"),
-        url: String::from("mqtt-keywords.html#mqtt-connect-password"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-connect-password"),
         setup: mqtt_conn_password_setup,
     };
     let _g_mqtt_conn_password_kw_id = helper_keyword_register_sticky_buffer(&kw);
@@ -1157,7 +1171,7 @@ pub unsafe extern "C" fn SCDetectMqttRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("mqtt.connect.clientid"),
         desc: String::from("sticky buffer to match on the MQTT CONNECT clientid"),
-        url: String::from("mqtt-keywords.html#mqtt-connect-clientid"),
+        url: String::from("/rules/mqtt-keywords.html#mqtt-connect-clientid"),
         setup: mqtt_conn_clientid_setup,
     };
     let _g_mqtt_conn_password_kw_id = helper_keyword_register_sticky_buffer(&kw);

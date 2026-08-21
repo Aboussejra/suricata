@@ -15,10 +15,46 @@
  * 02110-1301, USA.
  */
 
+pub mod applayer;
+pub mod conf;
 pub mod debug;
+pub mod detect;
+pub mod direction;
 pub mod eve;
+pub mod flow;
 pub mod jsonbuilder;
 pub mod plugin;
+pub mod thread;
 
 pub const IPPROTO_TCP: u8 = 6;
 pub const IPPROTO_UDP: u8 = 17;
+
+pub const STREAM_START: u8 = 0x01;
+pub const STREAM_EOF: u8 = 0x02;
+pub const STREAM_TOSERVER: u8 = 0x04;
+pub const STREAM_TOCLIENT: u8 = 0x08;
+pub const STREAM_GAP: u8 = 0x10;
+pub const STREAM_DEPTH: u8 = 0x20;
+pub const STREAM_MIDSTREAM: u8 = 0x40;
+/// stream is async : packets are seen in only one direction.
+pub const STREAM_ASYNC: u8 = 0x80;
+
+/// Cast pointer to a variable, as a mutable reference to an object
+///
+/// UNSAFE !
+#[macro_export]
+macro_rules! cast_pointer {
+    ($ptr:ident, $ty:ty) => {
+        &mut *($ptr as *mut $ty)
+    };
+}
+
+/// Create a slice, given a buffer and a length
+///
+/// UNSAFE !
+#[macro_export]
+macro_rules! build_slice {
+    ($buf:ident, $len:expr) => {
+        std::slice::from_raw_parts($buf, $len)
+    };
+}

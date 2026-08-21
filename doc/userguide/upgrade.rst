@@ -1,3 +1,4 @@
+
 Upgrading
 =========
 
@@ -44,6 +45,7 @@ Major Changes
   be ``bypass``, ``track-only`` or ``full``.
 - Default value for ``stream.reassembly.depth`` when the value is not specified in
   suricata.yaml is now 1 MiB instead of 0/unlimited.
+- LLMNR protocol parser, logger and sticky buffers are implemented.
 
 Logging Changes
 ~~~~~~~~~~~~~~~
@@ -54,6 +56,27 @@ Logging Changes
 - Ethertype values (``ether.ether_type``) are now logged matching the network order value.
   E.g., previously, ``ether_type`` values were logged in host order;  an ethertype value of ``0xfbb7``
   (network order) was logged as `47099`` (``0xb7fb``). This ethertype value will be logged as ``64439``.
+
+- Alert verdict key is changed from to ``reject-target`` to ``reject_target``
+
+- App-layer stats protocols names replace dash by underscore, meaning
+  ``stats.app_layer.*.ftp-data`` becomes ``stats.app_layer.*.ftp_data``,
+  and same for bittorrent_dht
+
+Removals
+~~~~~~~~
+
+- The deprecated ``http-log`` output has been removed. Use ``eve-log``
+  with the ``http`` event type for HTTP logging.
+- flowbits ``toggle`` command has been deprecated.
+
+Keyword Changes
+~~~~~~~~~~~~~~~
+
+- HTTP2 keywords have now better progress defined, with the http2 transaction progress
+  being split per direction. This means that some rules should match sooner,
+  some rules will have less false negatives, and some rules will trigger once per transaction
+  instead of twice (one time for each direction)
 
 Other Changes
 ~~~~~~~~~~~~~
@@ -79,6 +102,24 @@ Other Changes
   really enforced and there will be no hassh computation
   even if rules try to use it.
 
+- Any inconsistent protocol enable/disable settings will issue a warning and would
+  favor ipproto specific settings over protocol's global enable/disable settings. e.g.
+  ``app-layer.protocols.sip.tcp.enabled`` would be read and preferred over
+  ``app-layer.protocols.sip.enabled``.
+
+- `alert pkthdr` is now only available for decoder event rules. Previously it acted
+  like `alert ip`.
+- ``ldap`` has bound the maximum number of responses per transaction
+  to 1024 by default.
+
+Changes for Library Users and Plugin Developers
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- The built-in library run-mode has been removed. If your application
+  is relying on this run-mode, it should implement its own application
+  specific run-mode. See the example, ``examples/lib/custom`` for an
+  example. For more details, see
+  https://redmine.openinfosecfoundation.org/issues/8259.
 
 Upgrading to 8.0.1
 ------------------

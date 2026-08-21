@@ -26,24 +26,24 @@
 #ifndef SURICATA_FLOW_STORAGE_H
 #define SURICATA_FLOW_STORAGE_H
 
+#ifndef SURICATA_BINDGEN_H
 #include "flow.h"
+#endif
 
-typedef struct FlowStorageId {
+typedef struct SCFlowStorageId {
     int id;
-} FlowStorageId;
+} SCFlowStorageId;
 
-unsigned int FlowStorageSize(void);
+unsigned int SCFlowStorageSize(void);
 
-void *FlowGetStorageById(const Flow *h, FlowStorageId id);
-int FlowSetStorageById(Flow *h, FlowStorageId id, void *ptr);
-void *FlowAllocStorageById(Flow *h, FlowStorageId id);
+void *SCFlowGetStorageById(const Flow *h, SCFlowStorageId id);
+int SCFlowSetStorageById(Flow *h, SCFlowStorageId id, void *ptr);
 
-void FlowFreeStorageById(Flow *h, FlowStorageId id);
-void FlowFreeStorage(Flow *h);
+void SCFlowFreeStorageById(Flow *h, SCFlowStorageId id);
+void SCFlowFreeStorage(Flow *h);
 
-void RegisterFlowStorageTests(void);
+void SCRegisterFlowStorageTests(void);
 
-FlowStorageId FlowStorageRegister(const char *name, const unsigned int size,
-        void *(*Alloc)(unsigned int), void (*Free)(void *));
+SCFlowStorageId SCFlowStorageRegister(const char *name, void (*Free)(void *));
 
 #endif /* SURICATA_FLOW_STORAGE_H */

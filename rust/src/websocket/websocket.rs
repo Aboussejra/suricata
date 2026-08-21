@@ -17,7 +17,7 @@
 
 use super::parser;
 use crate::applayer::{self, *};
-use crate::conf::conf_get;
+use crate::conf::{conf_get, get_memval};
 use crate::core::{
     sc_app_layer_parser_trigger_raw_stream_inspection, ALPROTO_FAILED, ALPROTO_UNKNOWN, IPPROTO_TCP,
 };
@@ -220,7 +220,7 @@ impl WebSocketState {
                         (&mut self.c2s_buf, &mut self.c2s_dec)
                     };
                     let mut compress = pdu.compress;
-                    if !buf.data.is_empty() || !pdu.fin {
+                    if pdu.opcode < 8 && (!buf.data.is_empty() || !pdu.fin) {
                         if buf.data.is_empty() {
                             buf.compress = pdu.compress;
                         }
@@ -234,7 +234,7 @@ impl WebSocketState {
                         }
                     }
                     tx.pdu = pdu;
-                    if tx.pdu.fin && !buf.data.is_empty() {
+                    if tx.pdu.opcode < 8 && tx.pdu.fin && !buf.data.is_empty() {
                         // the final PDU gets the full reassembled payload
                         compress = buf.compress;
                         std::mem::swap(&mut tx.pdu.payload, &mut buf.data);
@@ -437,8 +437,15 @@ pub unsafe extern "C" fn SCRegisterWebSocketParser() {
         }
         SCLogDebug!("Rust websocket parser registered.");
         if let Some(val) = conf_get("app-layer.protocols.websocket.max-payload-size") {
-            if let Ok(v) = val.parse::<u32>() {
-                WEBSOCKET_MAX_PAYLOAD_SIZE = v;
+            if let Ok(v) = get_memval(val) {
+                if let Ok(vu) = u32::try_from(v) {
+                    WEBSOCKET_MAX_PAYLOAD_SIZE = vu;
+                } else {
+                    SCLogError!(
+                        "Too big value for websocket.max-payload-size: max is {}.",
+                        u32::MAX
+                    );
+                }
             } else {
                 SCLogError!("Invalid value for websocket.max-payload-size");
             }

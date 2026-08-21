@@ -71,25 +71,34 @@ typedef struct SCTransformTableElmt {
     uint32_t flags;
     int (*Setup)(DetectEngineCtx *, Signature *, const char *);
     void (*Free)(DetectEngineCtx *, void *);
-    void (*Transform)(DetectEngineThreadCtx *, InspectionBuffer *, void *context);
-    bool (*TransformValidate)(const uint8_t *content, uint16_t content_len, void *context);
-    void (*TransformId)(const uint8_t **id_data, uint32_t *id_length, void *context);
+    void (*Transform)(DetectEngineThreadCtx *, InspectionBuffer *, const void *context);
+    bool (*TransformValidate)(const uint8_t *content, uint16_t content_len, const void *context);
+    void (*TransformId)(const uint8_t **id_data, uint32_t *id_length, const void *context);
 } SCTransformTableElmt;
 
 int SCDetectHelperNewKeywordId(void);
 
 uint16_t SCDetectHelperKeywordRegister(const SCSigTableAppLiteElmt *kw);
 void SCDetectHelperKeywordAliasRegister(uint16_t kwid, const char *alias);
-int SCDetectHelperBufferRegister(const char *name, AppProto alproto, uint8_t direction);
+int SCDetectHelperBufferProgressRegister(
+        const char *name, AppProto alproto, uint8_t direction, uint8_t progress);
 
 int SCDetectHelperBufferMpmRegister(const char *name, const char *desc, AppProto alproto,
         uint8_t direction, InspectionSingleBufferGetDataPtr GetData);
+int SCDetectHelperBufferProgressRegisterSubState(
+        const char *name, AppProto alproto, uint8_t direction, uint8_t sub_state, uint8_t progress);
+int SCDetectRegisterMpmGeneric(const char *name, const char *desc, AppProto alproto,
+        uint8_t direction, InspectionBufferGetDataPtr GetData, uint8_t progress);
 int SCDetectHelperBufferProgressMpmRegister(const char *name, const char *desc, AppProto alproto,
-        uint8_t direction, InspectionSingleBufferGetDataPtr GetData, int progress);
+        uint8_t direction, InspectionSingleBufferGetDataPtr GetData, uint8_t progress);
 int SCDetectHelperMultiBufferMpmRegister(const char *name, const char *desc, AppProto alproto,
         uint8_t direction, InspectionMultiBufferGetDataPtr GetData);
 int SCDetectHelperMultiBufferProgressMpmRegister(const char *name, const char *desc,
-        AppProto alproto, uint8_t direction, InspectionMultiBufferGetDataPtr GetData, int progress);
+        AppProto alproto, uint8_t direction, InspectionMultiBufferGetDataPtr GetData,
+        uint8_t progress);
+int SCDetectHelperMultiBufferProgressMpmRegisterSubState(const char *name, const char *desc,
+        AppProto alproto, uint8_t direction, InspectionMultiBufferGetDataPtr GetData,
+        uint8_t sub_state, uint8_t progress);
 
 int SCDetectHelperTransformRegister(const SCTransformTableElmt *kw);
 

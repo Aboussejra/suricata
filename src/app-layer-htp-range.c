@@ -119,10 +119,7 @@ static bool ContainerUrlRangeCompare(void *a, void *b)
         return false;
     }
 
-    if (SCBufferCmp(as->key, as->len, bs->key, bs->len) == 0) {
-        return true;
-    }
-    return false;
+    return SCBufferCmp(as->key, as->len, bs->key, bs->len) == 0;
 }
 
 static uint32_t ContainerUrlRangeHash(uint32_t hash_seed, void *s)
@@ -175,7 +172,7 @@ void HttpRangeContainersInit(void)
     const char *str = NULL;
     uint64_t memcap = HTTP_RANGE_DEFAULT_MEMCAP;
     uint32_t timeout = HTTP_RANGE_DEFAULT_TIMEOUT;
-    if (SCConfGet("app-layer.protocols.http.byterange.memcap", &str) == 1) {
+    if (SCConfGetNonNull("app-layer.protocols.http.byterange.memcap", &str) == 1) {
         if (ParseSizeStringU64(str, &memcap) < 0) {
             SCLogWarning("memcap value cannot be deduced: %s,"
                          " resetting to default",
@@ -183,7 +180,7 @@ void HttpRangeContainersInit(void)
             memcap = 0;
         }
     }
-    if (SCConfGet("app-layer.protocols.http.byterange.timeout", &str) == 1) {
+    if (SCConfGetNonNull("app-layer.protocols.http.byterange.timeout", &str) == 1) {
         size_t slen = strlen(str);
         if (slen > UINT16_MAX || StringParseUint32(&timeout, 10, (uint16_t)slen, str) <= 0) {
             SCLogWarning("timeout value cannot be deduced: %s,"

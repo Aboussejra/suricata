@@ -99,7 +99,7 @@ void DecodeIPV6FragHeader(Packet *p, const uint8_t *pkt,
     int frag_morefrags   = (*(pkt + 2) << 8 | *(pkt + 3)) & 0x0001;
 
     p->l3.vars.ip6.eh.fh_offset = frag_offset;
-    p->l3.vars.ip6.eh.fh_more_frags_set = frag_morefrags ? true : false;
+    p->l3.vars.ip6.eh.fh_more_frags_set = frag_morefrags;
     p->l3.vars.ip6.eh.fh_nh = *pkt;
 
     uint32_t fh_id;
@@ -304,8 +304,10 @@ static void DecodeIPV6ExtHdrs(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, 
                     /* length field for each opt */
                     uint8_t ip6_optlen = *(ptr + 1);
 
-                    /* see if the optlen from the packet fits the total optslen */
-                    if ((offset + 1 + ip6_optlen) > optslen) {
+                    /* see if the optlen from the packet fits the total optslen.
+                     * the option occupies 2 header bytes (type + len) plus
+                     * ip6_optlen data bytes, so its data must end within optslen. */
+                    if ((offset + 2 + ip6_optlen) > optslen) {
                         ENGINE_SET_INVALID_EVENT(p, IPV6_EXTHDR_INVALID_OPTLEN);
                         break;
                     }

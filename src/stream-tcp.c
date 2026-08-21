@@ -418,7 +418,7 @@ static void *StreamTcpSessionPoolAlloc(void)
     return ptr;
 }
 
-static int StreamTcpSessionPoolInit(void *data, void* initdata)
+static int StreamTcpSessionPoolInit(void *data)
 {
     memset(data, 0, sizeof(TcpSession));
     StreamTcpIncrMemuse((uint64_t)sizeof(TcpSession));
@@ -533,7 +533,7 @@ void StreamTcpInitConfig(bool quiet)
     }
 
     const char *temp_stream_memcap_str;
-    if (SCConfGet("stream.memcap", &temp_stream_memcap_str) == 1) {
+    if (SCConfGetNonNull("stream.memcap", &temp_stream_memcap_str) == 1) {
         uint64_t stream_memcap_copy;
         if (ParseSizeStringU64(temp_stream_memcap_str, &stream_memcap_copy) < 0) {
             SCLogError("Error parsing stream.memcap "
@@ -585,7 +585,7 @@ void StreamTcpInitConfig(bool quiet)
     }
 
     const char *temp_stream_inline_str;
-    if (SCConfGet("stream.inline", &temp_stream_inline_str) == 1) {
+    if (SCConfGetNonNull("stream.inline", &temp_stream_inline_str) == 1) {
         int inl = 0;
 
         /* checking for "auto" and falling back to boolean to provide
@@ -705,7 +705,7 @@ void StreamTcpInitConfig(bool quiet)
     }
 
     const char *temp_stream_reassembly_memcap_str;
-    if (SCConfGet("stream.reassembly.memcap", &temp_stream_reassembly_memcap_str) == 1) {
+    if (SCConfGetNonNull("stream.reassembly.memcap", &temp_stream_reassembly_memcap_str) == 1) {
         uint64_t stream_reassembly_memcap_copy;
         if (ParseSizeStringU64(temp_stream_reassembly_memcap_str,
                                &stream_reassembly_memcap_copy) < 0) {
@@ -727,7 +727,7 @@ void StreamTcpInitConfig(bool quiet)
     }
 
     const char *temp_stream_reassembly_depth_str;
-    if (SCConfGet("stream.reassembly.depth", &temp_stream_reassembly_depth_str) == 1) {
+    if (SCConfGetNonNull("stream.reassembly.depth", &temp_stream_reassembly_depth_str) == 1) {
         if (ParseSizeStringU32(temp_stream_reassembly_depth_str,
                                &stream_config.reassembly_depth) < 0) {
             SCLogError("Error parsing "
@@ -754,7 +754,7 @@ void StreamTcpInitConfig(bool quiet)
 
     if (randomize) {
         const char *temp_rdrange;
-        if (SCConfGet("stream.reassembly.randomize-chunk-range", &temp_rdrange) == 1) {
+        if (SCConfGetNonNull("stream.reassembly.randomize-chunk-range", &temp_rdrange) == 1) {
             if (ParseSizeStringU16(temp_rdrange, &rdrange) < 0) {
                 SCLogError("Error parsing "
                            "stream.reassembly.randomize-chunk-range "
@@ -769,7 +769,7 @@ void StreamTcpInitConfig(bool quiet)
     }
 
     const char *temp_stream_reassembly_toserver_chunk_size_str;
-    if (SCConfGet("stream.reassembly.toserver-chunk-size",
+    if (SCConfGetNonNull("stream.reassembly.toserver-chunk-size",
                 &temp_stream_reassembly_toserver_chunk_size_str) == 1) {
         if (ParseSizeStringU16(temp_stream_reassembly_toserver_chunk_size_str,
                                &stream_config.reassembly_toserver_chunk_size) < 0) {
@@ -791,7 +791,7 @@ void StreamTcpInitConfig(bool quiet)
                         rdrange / 100);
     }
     const char *temp_stream_reassembly_toclient_chunk_size_str;
-    if (SCConfGet("stream.reassembly.toclient-chunk-size",
+    if (SCConfGetNonNull("stream.reassembly.toclient-chunk-size",
                 &temp_stream_reassembly_toclient_chunk_size_str) == 1) {
         if (ParseSizeStringU16(temp_stream_reassembly_toclient_chunk_size_str,
                                &stream_config.reassembly_toclient_chunk_size) < 0) {
@@ -854,12 +854,9 @@ void StreamTcpInitConfig(bool quiet)
         SCMutexLock(&ssn_pool_mutex);
         if (ssn_pool == NULL) {
             ssn_pool = PoolThreadInit(1, /* thread */
-                    0, /* unlimited */
-                    stream_config.prealloc_sessions,
-                    sizeof(TcpSession),
-                    StreamTcpSessionPoolAlloc,
-                    StreamTcpSessionPoolInit, NULL,
-                    StreamTcpSessionPoolCleanup, NULL);
+                    0,                   /* unlimited */
+                    stream_config.prealloc_sessions, sizeof(TcpSession), StreamTcpSessionPoolAlloc,
+                    StreamTcpSessionPoolInit, StreamTcpSessionPoolCleanup);
         }
         SCMutexUnlock(&ssn_pool_mutex);
     }
@@ -5683,7 +5680,7 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
 
     DEBUG_ASSERT_FLOW_LOCKED(p->flow);
 
-    SCLogDebug("PcapPacketCntGet(p) %" PRIu64, PcapPacketCntGet(p));
+    SCLogDebug("pcap_cnt %" PRIu64, PcapPacketCntGet(p));
 
     TcpSession *ssn = (TcpSession *)p->flow->protoctx;
     const TCPHdr *tcph = PacketGetTCP(p);
@@ -5909,8 +5906,9 @@ static inline int StreamTcpValidateChecksum(Packet *p)
 
     if (p->l4.csum != 0) {
         ret = 0;
-        if (p->livedev) {
-            (void) SC_ATOMIC_ADD(p->livedev->invalid_checksums, 1);
+        LiveDevice *dev = LiveDeviceGetById(p->livedev_id);
+        if (dev) {
+            (void)SC_ATOMIC_ADD(dev->invalid_checksums, 1);
         } else if (PcapPacketCntGet(p)) {
             PcapIncreaseInvalidChecksum();
         }
@@ -6118,7 +6116,7 @@ TmEcode StreamTcp (ThreadVars *tv, Packet *p, void *data, PacketQueueNoLock *pq)
 
     StreamTcpThread *stt = (StreamTcpThread *)data;
 
-    SCLogDebug("PcapPacketCntGet(p) %" PRIu64 " direction %s pkt_src %s", PcapPacketCntGet(p),
+    SCLogDebug("pcap_cnt %" PRIu64 " direction %s pkt_src %s", PcapPacketCntGet(p),
             p->flow ? (FlowGetPacketDirection(p->flow, p) == TOSERVER ? "toserver" : "toclient")
                     : "noflow",
             PktSrcToString(p->pkt_src));
@@ -6221,12 +6219,9 @@ TmEcode StreamTcpThreadInit(ThreadVars *tv, void *initdata, void **data)
     SCMutexLock(&ssn_pool_mutex);
     if (ssn_pool == NULL) {
         ssn_pool = PoolThreadInit(1, /* thread */
-                0, /* unlimited */
-                stream_config.prealloc_sessions,
-                sizeof(TcpSession),
-                StreamTcpSessionPoolAlloc,
-                StreamTcpSessionPoolInit, NULL,
-                StreamTcpSessionPoolCleanup, NULL);
+                0,                   /* unlimited */
+                stream_config.prealloc_sessions, sizeof(TcpSession), StreamTcpSessionPoolAlloc,
+                StreamTcpSessionPoolInit, StreamTcpSessionPoolCleanup);
         stt->ssn_pool_id = 0;
         SCLogDebug("pool size %d, thread ssn_pool_id %d", PoolThreadSize(ssn_pool), stt->ssn_pool_id);
     } else {
@@ -6935,7 +6930,7 @@ static void StreamTcpPseudoPacketCreateDetectLogFlush(ThreadVars *tv,
     np->flags |= PKT_PSEUDO_DETECTLOG_FLUSH;
     memcpy(&np->vlan_id[0], &f->vlan_id[0], sizeof(np->vlan_id));
     np->vlan_idx = f->vlan_idx;
-    np->livedev = (struct LiveDevice_ *)f->livedev;
+    np->livedev_id = f->livedev_id;
 
     if (parent->flags & PKT_NOPACKET_INSPECTION) {
         DecodeSetNoPacketInspectionFlag(np);
@@ -7103,10 +7098,10 @@ void StreamTcpDetectLogFlush(ThreadVars *tv, StreamTcpThread *stt, Flow *f, Pack
     TcpSession *ssn = f->protoctx;
     ssn->client.flags |= STREAMTCP_STREAM_FLAG_TRIGGER_RAW;
     ssn->server.flags |= STREAMTCP_STREAM_FLAG_TRIGGER_RAW;
-    bool ts = PKT_IS_TOSERVER(p) ? true : false;
+    bool ts = PKT_IS_TOSERVER(p);
     ts ^= StreamTcpInlineMode();
-    StreamTcpPseudoPacketCreateDetectLogFlush(tv, stt, p, ssn, pq, ts^0);
     StreamTcpPseudoPacketCreateDetectLogFlush(tv, stt, p, ssn, pq, ts^1);
+    StreamTcpPseudoPacketCreateDetectLogFlush(tv, stt, p, ssn, pq, ts ^ 0);
 }
 
 /**

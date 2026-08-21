@@ -361,11 +361,7 @@ bool DetectAddressListsAreEqual(DetectAddress *list1, DetectAddress *list2)
     }
 
     // Are the lists of the same size?
-    if (!(item == NULL && it == NULL)) {
-        return false;
-    }
-
-    return true;
+    return item == NULL && it == NULL;
 }
 
 /**
@@ -1219,7 +1215,8 @@ int DetectAddressTestConfVars(void)
 {
     SCLogDebug("Testing address conf vars for any misconfigured values");
 
-    ResolvedVariablesList var_list = TAILQ_HEAD_INITIALIZER(var_list);
+    ResolvedVariablesList var_list;
+    TAILQ_INIT(&var_list);
 
     SCConfNode *address_vars_node = SCConfGetNode("vars.address-groups");
     if (address_vars_node == NULL) {

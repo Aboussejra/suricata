@@ -85,6 +85,7 @@ enum PktSrcEnum {
 #include "decode-ipv6.h"
 #include "decode-icmpv4.h"
 #include "decode-icmpv6.h"
+#include "decode-igmp.h"
 #include "decode-tcp.h"
 #include "decode-udp.h"
 #include "decode-sctp.h"
@@ -247,8 +248,9 @@ struct PacketContextData {
  * found in this packet */
 typedef struct PacketAlert_ {
     SigIntId iid;   /* Internal ID, used for sorting */
-    uint8_t action; /* Internal num, used for thresholding */
+    uint8_t action; /* Rule or threshold action to be applied to packet */
     uint8_t flags;
+    uint8_t sub_state; /**< tx sub state. 0 if not used. */
     const struct Signature_ *s;
     uint64_t tx_id; /* Used for sorting */
     int64_t frame_id;
@@ -286,6 +288,7 @@ extern uint16_t packet_alert_max;
 typedef struct PacketAlerts_ {
     uint16_t cnt;
     uint16_t discarded;
+    uint16_t firewall_discarded; /* alerts discarded after a drop, in fw mode*/
     uint16_t suppressed;
     PacketAlert *alerts;
     /* single pa used when we're dropping,
@@ -384,6 +387,7 @@ enum PacketDropReason {
     PKT_DROP_REASON_DEFRAG_MEMCAP,
     PKT_DROP_REASON_FLOW_MEMCAP,
     PKT_DROP_REASON_FLOW_DROP,
+    PKT_DROP_REASON_EP_FLOW_DROP,
     PKT_DROP_REASON_APPLAYER_ERROR,
     PKT_DROP_REASON_APPLAYER_MEMCAP,
     PKT_DROP_REASON_RULES,
@@ -393,12 +397,19 @@ enum PacketDropReason {
     PKT_DROP_REASON_STREAM_MIDSTREAM,
     PKT_DROP_REASON_STREAM_REASSEMBLY,
     PKT_DROP_REASON_STREAM_URG,
-    PKT_DROP_REASON_NFQ_ERROR,             /**< no nfq verdict, must be error */
-    PKT_DROP_REASON_INNER_PACKET,          /**< drop issued by inner (tunnel) packet */
-    PKT_DROP_REASON_DEFAULT_PACKET_POLICY, /**< drop issued by default packet policy */
-    PKT_DROP_REASON_DEFAULT_APP_POLICY,    /**< drop issued by default app policy */
-    PKT_DROP_REASON_STREAM_PRE_HOOK,       /**< drop issued in the pre_stream hook */
-    PKT_DROP_REASON_FLOW_PRE_HOOK,         /**< drop issued in the pre_flow hook */
+    PKT_DROP_REASON_NFQ_ERROR,    /**< no nfq verdict, must be error */
+    PKT_DROP_REASON_INNER_PACKET, /**< drop issued by inner (tunnel) packet */
+/** If more non-firewall drop reasons are added, make sure not to "break" PKT_DROP_REASON_NON_FW_MAX
+ */
+/* Limiter for non-firewall drop reasons. */
+#define PKT_DROP_REASON_NON_FW_MAX PKT_DROP_REASON_INNER_PACKET
+    /** Firewall-related reasons only */
+    PKT_DROP_REASON_FW_RULES,
+    PKT_DROP_REASON_FW_DEFAULT_PACKET_POLICY, /**< drop issued by default packet policy */
+    PKT_DROP_REASON_FW_DEFAULT_APP_POLICY,    /**< drop issued by default app policy */
+    PKT_DROP_REASON_FW_STREAM_PRE_HOOK,       /**< drop issued in the pre_stream hook */
+    PKT_DROP_REASON_FW_FLOW_PRE_HOOK,         /**< drop issued in the pre_flow hook */
+    PKT_DROP_REASON_FW_FLOW_DROP,
     PKT_DROP_REASON_MAX,
 };
 
@@ -456,6 +467,7 @@ enum PacketL4Types {
     PACKET_L4_UDP,
     PACKET_L4_ICMPV4,
     PACKET_L4_ICMPV6,
+    PACKET_L4_IGMP,
     PACKET_L4_SCTP,
     PACKET_L4_GRE,
     PACKET_L4_ESP,
@@ -473,11 +485,14 @@ struct PacketL4 {
         SCTPHdr *sctph;
         GREHdr *greh;
         ESPHdr *esph;
+        IGMPHdr *igmph;
     } hdrs;
     union L4Vars {
         TCPVars tcp;
         ICMPV4Vars icmpv4;
         ICMPV6Vars icmpv6;
+        IGMPVars igmp;
+        SCTPVars sctp;
     } vars;
 };
 
@@ -615,7 +630,9 @@ typedef struct Packet_
     uint8_t *ext_pkt;
 
     /* Incoming interface */
-    struct LiveDevice_ *livedev;
+    uint16_t livedev_id;
+    /* Outgoing interface (bridge modes) */
+    uint16_t livedev_dst_id;
 
     PacketAlerts alerts;
 
@@ -954,6 +971,25 @@ static inline bool PacketIsARP(const Packet *p)
     return p->l3.type == PACKET_L3_ARP;
 }
 
+static inline IGMPHdr *PacketSetIGMP(Packet *p, const uint8_t *buf)
+{
+    DEBUG_VALIDATE_BUG_ON(p->l4.type != PACKET_L4_UNKNOWN);
+    p->l4.type = PACKET_L4_IGMP;
+    p->l4.hdrs.igmph = (IGMPHdr *)buf;
+    return p->l4.hdrs.igmph;
+}
+
+static inline const IGMPHdr *PacketGetIGMP(const Packet *p)
+{
+    DEBUG_VALIDATE_BUG_ON(p->l4.type != PACKET_L4_IGMP);
+    return p->l4.hdrs.igmph;
+}
+
+static inline bool PacketIsIGMP(const Packet *p)
+{
+    return p->l4.type == PACKET_L4_IGMP;
+}
+
 /** \brief Structure to hold thread specific data for all decode modules */
 typedef struct DecodeThreadVars_
 {
@@ -982,6 +1018,7 @@ typedef struct DecodeThreadVars_
     StatsCounterId counter_udp;
     StatsCounterId counter_icmpv4;
     StatsCounterId counter_icmpv6;
+    StatsCounterId counter_igmp;
     StatsCounterId counter_arp;
     StatsCounterId counter_ethertype_unknown;
 
@@ -990,6 +1027,11 @@ typedef struct DecodeThreadVars_
     StatsCounterId counter_raw;
     StatsCounterId counter_null;
     StatsCounterId counter_sctp;
+    StatsCounterId counter_sctp_init;
+    StatsCounterId counter_sctp_init_ack;
+    StatsCounterId counter_sctp_data;
+    StatsCounterId counter_sctp_abort;
+    StatsCounterId counter_sctp_shutdown;
     StatsCounterId counter_esp;
     StatsCounterId counter_ppp;
     StatsCounterId counter_geneve;
@@ -1170,6 +1212,7 @@ int DecodeCHDLC(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uin
 int DecodeTEMPLATE(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uint32_t);
 int DecodeNSH(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uint32_t);
 int DecodeARP(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uint32_t);
+int DecodeIGMP(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uint32_t);
 
 #ifdef UNITTESTS
 void DecodeIPV6FragHeader(Packet *p, const uint8_t *pkt,
@@ -1317,12 +1360,8 @@ void DecodeUnregisterCounters(void);
 #define PKT_FIRST_ALERTS BIT_U32(29)
 #define PKT_FIRST_TAG    BIT_U32(30)
 
-#define PKT_PSEUDO_LOG_FLUSH BIT_U32(31) /**< Detect/log flush for protocol upgrade */
-
 /** \brief return 1 if the packet is a pseudo packet */
-#define PKT_IS_PSEUDOPKT(p) \
-    ((p)->flags & (PKT_PSEUDO_STREAM_END|PKT_PSEUDO_DETECTLOG_FLUSH))
-#define PKT_IS_FLUSHPKT(p) ((p)->flags & (PKT_PSEUDO_LOG_FLUSH))
+#define PKT_IS_PSEUDOPKT(p) ((p)->flags & (PKT_PSEUDO_STREAM_END | PKT_PSEUDO_DETECTLOG_FLUSH))
 
 #define PKT_SET_SRC(p, src_val) ((p)->pkt_src = src_val)
 

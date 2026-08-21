@@ -28,6 +28,7 @@
 #include "suricata-common.h"
 
 #include "app-layer-protos.h"
+#include "app-layer-parser.h"
 
 #include "decode.h"
 #include "detect.h"
@@ -89,12 +90,21 @@ static int g_mpm_list_cnt[DETECT_BUFFER_MPM_TYPE_SIZE] = { 0, 0, 0 };
 static void RegisterInternal(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionBufferGetDataPtr GetData,
         InspectionSingleBufferGetDataPtr GetDataSingle,
-        InspectionMultiBufferGetDataPtr GetMultiData, AppProto alproto, int tx_min_progress)
+        InspectionMultiBufferGetDataPtr GetMultiData, AppProto alproto, uint8_t sub_state,
+        uint8_t tx_min_progress)
 {
     SCLogDebug("registering %s/%d/%d/%p/%p/%u/%d", name, direction, priority,
             PrefilterRegister, GetData, alproto, tx_min_progress);
 
-    BUG_ON(tx_min_progress >= 48);
+    if (!AppLayerParserIsEnabled(alproto)) {
+        SCLogDebug("%s is disabled", AppProtoToString(alproto));
+        return;
+    }
+    SCLogDebug("%s is enabled", AppProtoToString(alproto));
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto) && sub_state == 0);
+    DEBUG_VALIDATE_BUG_ON(!AppLayerParserSupportsSubStates(alproto) && sub_state != 0);
+
+    BUG_ON(tx_min_progress >= APP_LAYER_MAX_PROGRESS);
 
     // must register GetData with PrefilterGenericMpmRegister
     BUG_ON(PrefilterRegister == PrefilterGenericMpmRegister && GetData == NULL);
@@ -106,11 +116,6 @@ static void RegisterInternal(const char *name, int direction, int priority,
         FatalError("MPM engine registration for %s failed", name);
     }
 
-    // every HTTP2 can be accessed from DOH2
-    if (alproto == ALPROTO_HTTP2 || alproto == ALPROTO_DNS) {
-        RegisterInternal(name, direction, priority, PrefilterRegister, GetData, GetDataSingle,
-                GetMultiData, ALPROTO_DOH2, tx_min_progress);
-    }
     DetectBufferMpmRegistry *am = SCCalloc(1, sizeof(*am));
     BUG_ON(am == NULL);
     am->name = name;
@@ -132,6 +137,7 @@ static void RegisterInternal(const char *name, int direction, int priority,
     }
     am->app_v2.alproto = alproto;
     am->app_v2.tx_min_progress = tx_min_progress;
+    am->app_v2.sub_state = sub_state;
 
     if (g_mpm_list[DETECT_BUFFER_MPM_TYPE_APP] == NULL) {
         g_mpm_list[DETECT_BUFFER_MPM_TYPE_APP] = am;
@@ -147,30 +153,48 @@ static void RegisterInternal(const char *name, int direction, int priority,
     g_mpm_list_cnt[DETECT_BUFFER_MPM_TYPE_APP]++;
 
     SupportFastPatternForSigMatchList(sm_list, priority);
+    SCLogDebug("%s: sub_state %u", name, am->app_v2.sub_state);
 }
 
 void DetectAppLayerMpmRegister(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionBufferGetDataPtr GetData,
-        AppProto alproto, int tx_min_progress)
+        AppProto alproto, uint8_t tx_min_progress)
 {
-    RegisterInternal(name, direction, priority, PrefilterRegister, GetData, NULL, NULL, alproto,
+    RegisterInternal(name, direction, priority, PrefilterRegister, GetData, NULL, NULL, alproto, 0,
             tx_min_progress);
+}
+
+void DetectAppLayerMpmRegisterSubState(const char *name, int direction, int priority,
+        PrefilterRegisterFunc PrefilterRegister, InspectionBufferGetDataPtr GetData,
+        AppProto alproto, uint8_t sub_state, uint8_t tx_min_progress)
+{
+    SCLogDebug("%s: sub_state %u", name, sub_state);
+    RegisterInternal(name, direction, priority, PrefilterRegister, GetData, NULL, NULL, alproto,
+            sub_state, tx_min_progress);
 }
 
 void DetectAppLayerMpmRegisterSingle(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionSingleBufferGetDataPtr GetData,
-        AppProto alproto, int tx_min_progress)
+        AppProto alproto, uint8_t tx_min_progress)
 {
-    RegisterInternal(name, direction, priority, PrefilterRegister, NULL, GetData, NULL, alproto,
+    RegisterInternal(name, direction, priority, PrefilterRegister, NULL, GetData, NULL, alproto, 0,
             tx_min_progress);
 }
 
 void DetectAppLayerMpmMultiRegister(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionMultiBufferGetDataPtr GetData,
-        AppProto alproto, int tx_min_progress)
+        AppProto alproto, uint8_t tx_min_progress)
+{
+    RegisterInternal(name, direction, priority, PrefilterRegister, NULL, NULL, GetData, alproto, 0,
+            tx_min_progress);
+}
+
+void DetectAppLayerMpmMultiRegisterSubState(const char *name, int direction, int priority,
+        PrefilterRegisterFunc PrefilterRegister, InspectionMultiBufferGetDataPtr GetData,
+        AppProto alproto, uint8_t sub_state, uint8_t tx_min_progress)
 {
     RegisterInternal(name, direction, priority, PrefilterRegister, NULL, NULL, GetData, alproto,
-            tx_min_progress);
+            sub_state, tx_min_progress);
 }
 
 /** \internal
@@ -218,7 +242,7 @@ static void AppendTransformsToPname(
          * use it to construct the 'profile' name for the engine */
         char xforms[DETECT_PROFILE_NAME_LEN + 1];
         memset(xforms, 0, DETECT_PROFILE_NAME_LEN + 1);
-        for (int i = 0; i < transforms->cnt; i++) {
+        for (uint8_t i = 0; i < transforms->cnt; i++) {
             char ttstr[64];
             (void)snprintf(ttstr, sizeof(ttstr), "%s,",
                     sigmatch_table[transforms->transforms[i].transform].name);
@@ -263,6 +287,7 @@ void DetectAppLayerMpmRegisterByParentId(DetectEngineCtx *de_ctx,
             am->app_v2.GetData = t->app_v2.GetData;
             am->app_v2.alproto = t->app_v2.alproto;
             am->app_v2.tx_min_progress = t->app_v2.tx_min_progress;
+            am->app_v2.sub_state = t->app_v2.sub_state;
             am->priority = t->priority;
             am->sgh_mpm_context = t->sgh_mpm_context;
             am->sgh_mpm_context = MpmFactoryRegisterMpmCtxProfile(
@@ -854,7 +879,7 @@ int SignatureHasPacketContent(const Signature *s)
 {
     SCEnter();
 
-    if (!(s->proto.proto[IPPROTO_TCP / 8] & 1 << (IPPROTO_TCP % 8))) {
+    if (!DetectProtoContainsProto(&s->init_data->proto, IPPROTO_TCP)) {
         SCReturnInt(1);
     }
 
@@ -884,7 +909,7 @@ int SignatureHasStreamContent(const Signature *s)
 {
     SCEnter();
 
-    if (!(s->proto.proto[IPPROTO_TCP / 8] & 1 << (IPPROTO_TCP % 8))) {
+    if (!DetectProtoContainsProto(&s->init_data->proto, IPPROTO_TCP)) {
         SCReturnInt(0);
     }
 
@@ -965,10 +990,23 @@ void PatternMatchThreadDestroy(MpmThreadCtx *mpm_thread_ctx, uint16_t mpm_matche
     SCLogDebug("mpm_thread_ctx %p, mpm_matcher %"PRIu16"", mpm_thread_ctx, mpm_matcher);
     MpmDestroyThreadCtx(mpm_thread_ctx, mpm_matcher);
 }
-void PatternMatchThreadPrepare(MpmThreadCtx *mpm_thread_ctx, uint16_t mpm_matcher)
+void PatternMatchThreadPrepare(MpmThreadCtx *mpm_thread_ctx, DetectEngineCtx *de_ctx)
 {
-    SCLogDebug("mpm_thread_ctx %p, type %"PRIu16, mpm_thread_ctx, mpm_matcher);
-    MpmInitThreadCtx(mpm_thread_ctx, mpm_matcher);
+    SCLogDebug("mpm_thread_ctx %p, type %" PRIu16, mpm_thread_ctx, de_ctx->mpm_matcher);
+    MpmCtx cum_mpm_ctx = { 0 };
+    for (HashListTableBucket *htb = HashListTableGetListHead(de_ctx->mpm_hash_table); htb != NULL;
+            htb = HashListTableGetListNext(htb)) {
+        // iterate all de_ctx mpms to merge one MpmCtx with max pattern_cnt and max max_pat_id
+        const MpmStore *ms = (MpmStore *)HashListTableGetListData(htb);
+        if (ms == NULL || ms->mpm_ctx == NULL) {
+            continue;
+        }
+        if (ms->mpm_ctx->pattern_cnt > cum_mpm_ctx.pattern_cnt)
+            cum_mpm_ctx.pattern_cnt = ms->mpm_ctx->pattern_cnt;
+        if (ms->mpm_ctx->max_pat_id > cum_mpm_ctx.max_pat_id)
+            cum_mpm_ctx.max_pat_id = ms->mpm_ctx->max_pat_id;
+    }
+    MpmInitThreadCtx(mpm_thread_ctx, &cum_mpm_ctx, de_ctx->mpm_matcher);
 }
 
 /** \brief Predict a strength value for patterns
@@ -1523,18 +1561,23 @@ static const DetectBufferMpmRegistry *GetByMpmStore(
 void MpmStoreReportStats(const DetectEngineCtx *de_ctx)
 {
     HashListTableBucket *htb = NULL;
+    uint32_t *appstats = NULL;
+    uint32_t *pktstats = NULL;
+    uint32_t *framestats = NULL;
 
     uint32_t stats[MPMB_MAX] = {0};
-    DEBUG_VALIDATE_BUG_ON(de_ctx->buffer_type_id > UINT16_MAX);
-    int app_mpms_cnt = de_ctx->buffer_type_id;
-    uint32_t appstats[app_mpms_cnt + 1];    // +1 to silence scan-build
-    memset(&appstats, 0x00, sizeof(appstats));
-    int pkt_mpms_cnt = de_ctx->buffer_type_id;
-    uint32_t pktstats[pkt_mpms_cnt + 1];    // +1 to silence scan-build
-    memset(&pktstats, 0x00, sizeof(pktstats));
-    int frame_mpms_cnt = de_ctx->buffer_type_id;
-    uint32_t framestats[frame_mpms_cnt + 1]; // +1 to silence scan-build
-    memset(&framestats, 0x00, sizeof(framestats));
+    appstats = SCCalloc(de_ctx->buffer_type_id, sizeof(uint32_t));
+    if (appstats == NULL) {
+        goto end;
+    }
+    pktstats = SCCalloc(de_ctx->buffer_type_id, sizeof(uint32_t));
+    if (pktstats == NULL) {
+        goto end;
+    }
+    framestats = SCCalloc(de_ctx->buffer_type_id, sizeof(uint32_t));
+    if (framestats == NULL) {
+        goto end;
+    }
 
     for (htb = HashListTableGetListHead(de_ctx->mpm_hash_table);
             htb != NULL;
@@ -1610,6 +1653,13 @@ void MpmStoreReportStats(const DetectEngineCtx *de_ctx)
             um = um->next;
         }
     }
+end:
+    if (appstats)
+        SCFree(appstats);
+    if (pktstats)
+        SCFree(pktstats);
+    if (framestats)
+        SCFree(framestats);
 }
 
 /**
@@ -2068,6 +2118,14 @@ static HashListTable *DetectBufferInstanceInit(void)
             DetectBufferInstanceFreeFunc);
 }
 
+typedef struct MpmEngineList {
+    // We check for overflows before filling this array
+    // ALPROTO_MAX_STATIC constant should be enough for all engines
+    // (file.data should be the engine with most AppProtos and that would be 6)
+    AppProto array[ALPROTO_MAX_STATIC];
+    size_t idx;
+} MpmEngineList;
+
 static void PrepareMpms(DetectEngineCtx *de_ctx, SigGroupHead *sh)
 {
     HashListTable *bufs = DetectBufferInstanceInit();
@@ -2076,12 +2134,10 @@ static void PrepareMpms(DetectEngineCtx *de_ctx, SigGroupHead *sh)
     const int max_buffer_id = de_ctx->buffer_type_id + 1;
     const uint32_t max_sid = DetectEngineGetMaxSigId(de_ctx) / 8 + 1;
 
-    AppProto engines[max_buffer_id][g_alproto_max];
-    memset(engines, 0, sizeof(engines));
-    int engines_idx[max_buffer_id];
-    memset(engines_idx, 0, sizeof(engines_idx));
-    int types[max_buffer_id];
-    memset(types, 0, sizeof(types));
+    MpmEngineList *engines = SCCalloc(max_buffer_id, sizeof(MpmEngineList));
+    BUG_ON(engines == NULL);
+    int *types = SCCalloc(max_buffer_id, sizeof(int));
+    BUG_ON(types == NULL);
 
     /* flag the list+directions we have engines for as active */
     for (DetectBufferMpmRegistry *a = de_ctx->pkt_mpms_list; a != NULL; a = a->next) {
@@ -2104,7 +2160,8 @@ static void PrepareMpms(DetectEngineCtx *de_ctx, SigGroupHead *sh)
         const bool add_tc = ((a->direction == SIG_FLAG_TOCLIENT) && SGH_DIRECTION_TC(sh));
         if (add_ts || add_tc) {
             types[a->sm_list] = a->type;
-            engines[a->sm_list][engines_idx[a->sm_list]++] = a->frame_v1.alproto;
+            BUG_ON(engines[a->sm_list].idx >= ARRAY_SIZE(engines[a->sm_list].array));
+            engines[a->sm_list].array[engines[a->sm_list].idx++] = a->frame_v1.alproto;
 
             DetectBufferInstance lookup = { .list = a->sm_list, .alproto = a->frame_v1.alproto };
             DetectBufferInstance *instance = HashListTableLookup(bufs, &lookup, 0);
@@ -2124,7 +2181,8 @@ static void PrepareMpms(DetectEngineCtx *de_ctx, SigGroupHead *sh)
         const bool add_tc = ((a->direction == SIG_FLAG_TOCLIENT) && SGH_DIRECTION_TC(sh));
         if (add_ts || add_tc) {
             types[a->sm_list] = a->type;
-            engines[a->sm_list][engines_idx[a->sm_list]++] = a->app_v2.alproto;
+            BUG_ON(engines[a->sm_list].idx >= ARRAY_SIZE(engines[a->sm_list].array));
+            engines[a->sm_list].array[engines[a->sm_list].idx++] = a->app_v2.alproto;
 
             DetectBufferInstance lookup = { .list = a->sm_list, .alproto = a->app_v2.alproto };
             DetectBufferInstance *instance = HashListTableLookup(bufs, &lookup, 0);
@@ -2156,10 +2214,18 @@ static void PrepareMpms(DetectEngineCtx *de_ctx, SigGroupHead *sh)
             /* app engines are direction aware */
             case DETECT_BUFFER_MPM_TYPE_FRAME:
             case DETECT_BUFFER_MPM_TYPE_APP: {
-                for (int e = 0; e < engines_idx[list]; e++) {
-                    const AppProto alproto = engines[list][e];
-                    if (!(AppProtoEquals(s->alproto, alproto) || s->alproto == 0))
-                        continue;
+                for (size_t e = 0; e < engines[list].idx; e++) {
+                    const AppProto alproto = engines[list].array[e];
+                    if (s->init_data->hook.type == SIGNATURE_HOOK_TYPE_APP) {
+                        /* SIGNATURE_HOOK_TYPE_APP rules are exact about their protocol */
+                        if (!(AppProtoEqualsStrict(s->alproto, alproto))) {
+                            continue;
+                        }
+                    } else {
+                        /* other rules use the more relax AppProtoEquals logic */
+                        if (!(AppProtoEquals(s->alproto, alproto) || s->alproto == 0))
+                            continue;
+                    }
 
                     DetectBufferInstance lookup = { .list = list, .alproto = alproto };
                     DetectBufferInstance *instance = HashListTableLookup(bufs, &lookup, 0);
@@ -2318,6 +2384,8 @@ static void PrepareMpms(DetectEngineCtx *de_ctx, SigGroupHead *sh)
         }
     }
     HashListTableFree(bufs);
+    SCFree(engines);
+    SCFree(types);
 }
 
 /** \brief Prepare the pattern matcher ctx in a sig group head.

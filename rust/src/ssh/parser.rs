@@ -64,10 +64,7 @@ impl MessageCode {
 
 #[inline]
 fn is_not_lineend(b: u8) -> bool {
-    if b == 10 || b == 13 {
-        return false;
-    }
-    return true;
+    return b != 10 && b != 13;
 }
 
 //may leave \r at the end to be removed
@@ -80,7 +77,8 @@ pub fn ssh_parse_line(i: &[u8]) -> IResult<&[u8], &[u8]> {
     terminated(
         take_while(is_not_lineend),
         alt((tag("\n"), tag("\r\n"), parser)),
-    ).parse(i)
+    )
+    .parse(i)
 }
 
 #[derive(PartialEq, Eq)]
@@ -164,7 +162,7 @@ pub struct SshPacketKeyExchange<'a> {
     pub reserved: u32,
 }
 
-const SSH_HASSH_STRING_DELIMITER_SLICE: [u8; 1] = [b';'];
+const SSH_HASSH_STRING_DELIMITER_SLICE: [u8; 1] = *b";";
 
 impl SshPacketKeyExchange<'_> {
     pub fn generate_hassh(

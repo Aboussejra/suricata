@@ -39,6 +39,11 @@
 #include "util-optimize.h"
 #include "flow.h"
 
+static inline uint16_t DecodeTCPGetU16(const uint8_t *d)
+{
+    return (uint16_t)(((uint16_t)d[0] << 8) | (uint16_t)d[1]);
+}
+
 static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
 {
     uint8_t tcp_opt_cnt = 0;
@@ -74,8 +79,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
             }
 
             tcp_opts[tcp_opt_cnt].type = type;
-            tcp_opts[tcp_opt_cnt].len  = olen;
-            tcp_opts[tcp_opt_cnt].data = (olen > 2) ? (pkt+2) : NULL;
+            tcp_opts[tcp_opt_cnt].len = olen;
 
             /* we are parsing the most commonly used opts to prevent
              * us from having to walk the opts list for these all the
@@ -85,6 +89,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                     if (olen != TCP_OPT_WS_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         if (p->l4.vars.tcp.wscale_set != 0) {
                             ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
@@ -102,11 +107,12 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                     if (olen != TCP_OPT_MSS_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         if (p->l4.vars.tcp.mss_set) {
                             ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
                             p->l4.vars.tcp.mss_set = true;
-                            p->l4.vars.tcp.mss = SCNtohs(*(uint16_t *)(tcp_opts[tcp_opt_cnt].data));
+                            p->l4.vars.tcp.mss = DecodeTCPGetU16(tcp_opts[tcp_opt_cnt].data);
                         }
                     }
                     break;
@@ -114,6 +120,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                     if (olen != TCP_OPT_SACKOK_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         if (TCP_GET_SACKOK(p)) {
                             ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
@@ -125,6 +132,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                     if (olen != TCP_OPT_TS_LEN) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         if (p->l4.vars.tcp.ts_set) {
                             ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
@@ -144,6 +152,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                                !((olen - 2) % 8 == 0)) {
                         ENGINE_SET_EVENT(p, TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         if (p->l4.vars.tcp.sack_set) {
                             ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
@@ -161,6 +170,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                                                !(((olen - 2) & 0x1) == 0))) {
                         ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         if (p->l4.vars.tcp.tfo_set) {
                             ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
@@ -173,7 +183,8 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                 case TCP_OPT_EXP2:
                     SCLogDebug("TCP EXP option, len %u", olen);
                     if (olen == 4 || olen == 12) {
-                        uint16_t magic = SCNtohs(*(uint16_t *)tcp_opts[tcp_opt_cnt].data);
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
+                        uint16_t magic = DecodeTCPGetU16(tcp_opts[tcp_opt_cnt].data);
                         if (magic == 0xf989) {
                             if (p->l4.vars.tcp.tfo_set) {
                                 ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
@@ -191,6 +202,7 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                     if (olen != 18) {
                         ENGINE_SET_INVALID_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         /* we can't validate the option as the key is out of band */
                         p->l4.vars.tcp.md5_option_present = true;
                     }
@@ -201,10 +213,18 @@ static void DecodeTCPOptions(Packet *p, const uint8_t *pkt, uint16_t pktlen)
                     if (olen < 4) {
                         ENGINE_SET_INVALID_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
                         /* we can't validate the option as the key is out of band */
                         p->l4.vars.tcp.ao_option_present = true;
                     }
                     break;
+                default:
+                    if (olen > 2) {
+                        tcp_opts[tcp_opt_cnt].data = (pkt + 2);
+                    } else {
+
+                        tcp_opts[tcp_opt_cnt].data = NULL;
+                    }
             }
 
             pkt += olen;

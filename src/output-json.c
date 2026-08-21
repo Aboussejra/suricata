@@ -225,10 +225,7 @@ static void EveAddPacketVars(const Packet *p, SCJsonBuilder *js_vars)
  */
 static bool SCStringHasPrefix(const char *s, const char *prefix)
 {
-    if (strncmp(s, prefix, strlen(prefix)) == 0) {
-        return true;
-    }
-    return false;
+    return strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
 static void EveAddFlowVars(const Flow *f, SCJsonBuilder *js_root, SCJsonBuilder **js_traffic)
@@ -467,23 +464,22 @@ void EveTcpFlags(const uint8_t flags, SCJsonBuilder *js)
         JB_SET_TRUE(js, "cwr");
 }
 
-void JsonAddrInfoInit(const Packet *p, enum SCOutputJsonLogDirection dir, JsonAddrInfo *addr)
+void JsonAddrInfoInit(const Packet *p, enum SCOutputJsonLogDirection dir, JsonAddrInfo *addr,
+        OutputJsonCommonSettings *cfg)
 {
-    char srcip[46] = {0}, dstip[46] = {0};
     Port sp, dp;
+
+    const void *src_ip = NULL;
+    const void *dst_ip = NULL;
 
     switch (dir) {
         case LOG_DIR_PACKET:
             if (PacketIsIPv4(p)) {
-                PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
-                        srcip, sizeof(srcip));
-                PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
-                        dstip, sizeof(dstip));
+                src_ip = GET_IPV4_SRC_ADDR_PTR(p);
+                dst_ip = GET_IPV4_DST_ADDR_PTR(p);
             } else if (PacketIsIPv6(p)) {
-                PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
-                        srcip, sizeof(srcip));
-                PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
-                        dstip, sizeof(dstip));
+                src_ip = GET_IPV6_SRC_ADDR(p);
+                dst_ip = GET_IPV6_DST_ADDR(p);
             } else {
                 /* Not an IP packet so don't do anything */
                 return;
@@ -495,29 +491,21 @@ void JsonAddrInfoInit(const Packet *p, enum SCOutputJsonLogDirection dir, JsonAd
         case LOG_DIR_FLOW_TOSERVER:
             if ((PKT_IS_TOSERVER(p))) {
                 if (PacketIsIPv4(p)) {
-                    PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV4_SRC_ADDR_PTR(p);
+                    dst_ip = GET_IPV4_DST_ADDR_PTR(p);
                 } else if (PacketIsIPv6(p)) {
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV6_SRC_ADDR(p);
+                    dst_ip = GET_IPV6_DST_ADDR(p);
                 }
                 sp = p->sp;
                 dp = p->dp;
             } else {
                 if (PacketIsIPv4(p)) {
-                    PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV4_DST_ADDR_PTR(p);
+                    dst_ip = GET_IPV4_SRC_ADDR_PTR(p);
                 } else if (PacketIsIPv6(p)) {
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV6_DST_ADDR(p);
+                    dst_ip = GET_IPV6_SRC_ADDR(p);
                 }
                 sp = p->dp;
                 dp = p->sp;
@@ -526,29 +514,21 @@ void JsonAddrInfoInit(const Packet *p, enum SCOutputJsonLogDirection dir, JsonAd
         case LOG_DIR_FLOW_TOCLIENT:
             if ((PKT_IS_TOCLIENT(p))) {
                 if (PacketIsIPv4(p)) {
-                    PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV4_SRC_ADDR_PTR(p);
+                    dst_ip = GET_IPV4_DST_ADDR_PTR(p);
                 } else if (PacketIsIPv6(p)) {
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV6_SRC_ADDR(p);
+                    dst_ip = GET_IPV6_DST_ADDR(p);
                 }
                 sp = p->sp;
                 dp = p->dp;
             } else {
                 if (PacketIsIPv4(p)) {
-                    PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV4_DST_ADDR_PTR(p);
+                    dst_ip = GET_IPV4_SRC_ADDR_PTR(p);
                 } else if (PacketIsIPv6(p)) {
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
-                            srcip, sizeof(srcip));
-                    PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
-                            dstip, sizeof(dstip));
+                    src_ip = GET_IPV6_DST_ADDR(p);
+                    dst_ip = GET_IPV6_SRC_ADDR(p);
                 }
                 sp = p->dp;
                 dp = p->sp;
@@ -559,8 +539,13 @@ void JsonAddrInfoInit(const Packet *p, enum SCOutputJsonLogDirection dir, JsonAd
             return;
     }
 
-    strlcpy(addr->src_ip, srcip, JSON_ADDR_LEN);
-    strlcpy(addr->dst_ip, dstip, JSON_ADDR_LEN);
+    if (PacketIsIPv4(p)) {
+        PrintInet(AF_INET, (const void *)src_ip, addr->src_ip, JSON_ADDR_LEN);
+        PrintInet(AF_INET, (const void *)dst_ip, addr->dst_ip, JSON_ADDR_LEN);
+    } else if (PacketIsIPv6(p)) {
+        PrintInetIPv6((const void *)src_ip, addr->src_ip, sizeof(addr->src_ip), cfg->compress_ipv6);
+        PrintInetIPv6((const void *)dst_ip, addr->dst_ip, sizeof(addr->dst_ip), cfg->compress_ipv6);
+    }
 
     switch (p->proto) {
         case IPPROTO_UDP:
@@ -783,7 +768,7 @@ static int CreateJSONEther(
                use the first set of mac addresses stored with their flow.
                The first set of macs should come from the flow's first packet,
                providing the most fitting representation of the event's ethernet. */
-            MacSet *ms = FlowGetStorageById(f, MacSetGetFlowStorageID());
+            MacSet *ms = SCFlowGetStorageById(f, MacSetGetFlowStorageID());
             if (ms != NULL && MacSetSize(ms) > 0) {
                 uint8_t *src = MacSetGetFirst(ms, MAC_SET_SRC);
                 uint8_t *dst = MacSetGetFirst(ms, MAC_SET_DST);
@@ -798,7 +783,7 @@ static int CreateJSONEther(
     } else if (f != NULL) {
         /* we are creating an ether object in a flow context, so we need to
            append to arrays */
-        MacSet *ms = FlowGetStorageById(f, MacSetGetFlowStorageID());
+        MacSet *ms = SCFlowGetStorageById(f, MacSetGetFlowStorageID());
         if (ms != NULL && MacSetSize(ms) > 0) {
             SCJbOpenObject(js, "ether");
             JSONMACAddrInfo info;
@@ -854,8 +839,9 @@ SCJsonBuilder *CreateEveHeader(const Packet *p, enum SCOutputJsonLogDirection di
     }
 
     /* input interface */
-    if (p->livedev) {
-        SCJbSetString(js, "in_iface", p->livedev->dev);
+    LiveDevice *dev = LiveDeviceGetById(p->livedev_id);
+    if (dev) {
+        SCJbSetString(js, "in_iface", dev->dev);
     }
 
     /* pcap_cnt */
@@ -884,7 +870,7 @@ SCJsonBuilder *CreateEveHeader(const Packet *p, enum SCOutputJsonLogDirection di
     /* 5-tuple */
     JsonAddrInfo addr_info = json_addr_info_zero;
     if (addr == NULL) {
-        JsonAddrInfoInit(p, dir, &addr_info);
+        JsonAddrInfoInit(p, dir, &addr_info, &eve_ctx->cfg);
         addr = &addr_info;
     }
     if (addr->src_ip[0] != '\0') {
@@ -922,6 +908,47 @@ SCJsonBuilder *CreateEveHeader(const Packet *p, enum SCOutputJsonLogDirection di
             if (PacketIsICMPv6(p)) {
                 SCJbSetUint(js, "icmp_type", PacketGetICMPv6(p)->type);
                 SCJbSetUint(js, "icmp_code", PacketGetICMPv6(p)->code);
+            }
+            break;
+        case IPPROTO_IGMP:
+            if (PacketIsIGMP(p)) {
+                SCLogDebug("rgmp %s", BOOL2STR(p->l4.vars.igmp.rgmp));
+                if (!p->l4.vars.igmp.rgmp) {
+                    SCJbOpenObject(js, "igmp");
+                    SCJbSetUint(js, "type", PacketGetIGMP(p)->type);
+                    SCJbSetUint(js, "version", p->l4.vars.igmp.version);
+                    SCJbClose(js);
+                } else {
+                    SCJbOpenObject(js, "rgmp");
+                    SCJbSetUint(js, "type", PacketGetIGMP(p)->type);
+                    SCJbClose(js);
+                }
+            }
+            break;
+        case IPPROTO_SCTP:
+            if (PacketIsSCTP(p)) {
+                SCJbOpenObject(js, "sctp");
+                SCJbSetUint(js, "vtag", SCTP_GET_RAW_VTAG(PacketGetSCTP(p)));
+                SCJbSetUint(js, "chunk_cnt", p->l4.vars.sctp.chunk_cnt);
+                const uint8_t cnt = p->l4.vars.sctp.tracked_chunk_cnt;
+                SCJbOpenArray(js, "chunk_types");
+                for (uint8_t i = 0; i < cnt; i++) {
+                    const char *name = SCSctpChunkTypeToString(p->l4.vars.sctp.chunk_types[i]);
+                    if (name) {
+                        SCJbAppendString(js, name);
+                    } else {
+                        char unknown[16];
+                        snprintf(unknown, sizeof(unknown), "unknown(%u)",
+                                p->l4.vars.sctp.chunk_types[i]);
+                        SCJbAppendString(js, unknown);
+                    }
+                }
+                SCJbClose(js);
+                SCJbSetBool(js, "has_init", p->l4.vars.sctp.has_init);
+                SCJbSetBool(js, "has_init_ack", p->l4.vars.sctp.has_init_ack);
+                SCJbSetBool(js, "has_data", p->l4.vars.sctp.has_data);
+                SCJbSetBool(js, "has_abort", p->l4.vars.sctp.has_abort);
+                SCJbClose(js);
             }
             break;
     }
@@ -989,12 +1016,6 @@ int OutputJSONBuffer(json_t *js, LogFileCtx *file_ctx, MemBuffer **buffer)
 
     LogFileWrite(file_ctx, *buffer);
     return 0;
-}
-
-void OutputJsonFlush(OutputJsonThreadCtx *ctx)
-{
-    LogFileCtx *file_ctx = ctx->file_ctx;
-    LogFileFlush(file_ctx);
 }
 
 void OutputJsonBuilderBuffer(
@@ -1183,6 +1204,14 @@ OutputInitResult OutputJsonInitCtx(SCConfNode *conf)
                 json_ctx->filetype = filetype;
             } else
                 FatalError("Invalid JSON output option: %s", output_s);
+        }
+
+        const SCConfNode *compress_ipv6 = SCConfNodeLookupChild(conf, "ipv6-compress");
+        if (compress_ipv6 && compress_ipv6->val && SCConfValIsTrue(compress_ipv6->val)) {
+            SCLogConfig("Will compress IPv6 addresses in EVE output per RFC 5952");
+            json_ctx->cfg.compress_ipv6 = true;
+        } else {
+            json_ctx->cfg.compress_ipv6 = false;
         }
 
         const char *prefix = SCConfNodeLookupChildValue(conf, "prefix");

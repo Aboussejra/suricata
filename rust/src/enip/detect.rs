@@ -18,23 +18,24 @@
 use nom8::character::complete::{char, digit1, space0};
 use nom8::combinator::{map_opt, opt, verify};
 use nom8::error::{make_error, ErrorKind};
-use nom8::Parser;
 use nom8::IResult;
+use nom8::Parser;
 
 use std::os::raw::{c_int, c_void};
 
 use super::constant::{EnipCommand, EnipStatus};
 use super::enip::{EnipTransaction, ALPROTO_ENIP};
 use super::parser::{
-    CipData, CipDir, EnipCipRequestPayload, EnipCipResponsePayload, EnipItemPayload, EnipPayload,
-    CIP_MULTIPLE_SERVICE,
+    CipData, CipDir, EnipCipPathSegment, EnipCipRequestPayload, EnipCipResponsePayload,
+    EnipItemPayload, EnipPayload, CIP_MULTIPLE_SERVICE,
 };
 
 use crate::core::{STREAM_TOCLIENT, STREAM_TOSERVER};
 use crate::detect::uint::{
-    detect_match_uint, detect_parse_uint_enum, DetectUintData, SCDetectU16Free, SCDetectU16Match,
-    SCDetectU16Parse, SCDetectU32Free, SCDetectU32Match, SCDetectU32Parse, SCDetectU8Free,
-    SCDetectU8Match, SCDetectU8Parse,
+    detect_match_uint, detect_parse_uint_enum, detect_uint_match_at_index, DetectUintArrayData,
+    DetectUintData, DetectUintIndex, SCDetectU16Free, SCDetectU16Match, SCDetectU16Parse,
+    SCDetectU32ArrayFree, SCDetectU32ArrayParse, SCDetectU32Free, SCDetectU32Match,
+    SCDetectU32Parse, SCDetectU8Free, SCDetectU8Match, SCDetectU8Parse,
 };
 use crate::detect::{
     helper_keyword_register_sticky_buffer, SigTableElmtStickyBuffer, SIGMATCH_INFO_ENUM_UINT,
@@ -42,9 +43,9 @@ use crate::detect::{
 };
 use suricata_sys::sys::{
     DetectEngineCtx, DetectEngineThreadCtx, Flow, SCDetectBufferSetActiveList,
-    SCDetectHelperBufferMpmRegister, SCDetectHelperBufferRegister, SCDetectHelperKeywordRegister,
-    SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList, SCSigTableAppLiteElmt, SigMatchCtx,
-    Signature,
+    SCDetectHelperBufferMpmRegister, SCDetectHelperBufferProgressRegister,
+    SCDetectHelperKeywordRegister, SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList,
+    SCSigTableAppLiteElmt, SigMatchCtx, Signature,
 };
 
 use crate::direction::Direction;
@@ -84,7 +85,8 @@ fn enip_parse_cip_service(i: &str) -> IResult<&str, DetectCipServiceData> {
     let (i, _) = space0.parse(i)?;
     let (i, service) = verify(map_opt(digit1, |s: &str| s.parse::<u8>().ok()), |&v| {
         v < 0x80
-    }).parse(i)?;
+    })
+    .parse(i)?;
     let mut class = None;
     let mut attribute = None;
     let (i, _) = space0.parse(i)?;
@@ -292,18 +294,34 @@ fn enip_get_status(tx: &EnipTransaction, direction: Direction) -> Option<u32> {
     return None;
 }
 
+macro_rules! get_enip_segment_val {
+    ($segment_type:expr) => {
+        |seg: &EnipCipPathSegment| {
+            if seg.segment_type >> 2 == $segment_type {
+                Some(seg.value)
+            } else {
+                None
+            }
+        }
+    };
+}
+
 fn enip_cip_match_segment(
-    d: &CipData, ctx: &DetectUintData<u32>, segment_type: u8,
+    d: &CipData, ctx: &DetectUintArrayData<u32>, segment_type: u8, done: bool,
 ) -> std::os::raw::c_int {
     if let CipDir::Request(req) = &d.cipdir {
-        for seg in req.path.iter() {
-            if seg.segment_type >> 2 == segment_type && detect_match_uint(ctx, seg.value) {
-                return 1;
-            }
+        let r = detect_uint_match_at_index::<EnipCipPathSegment, u32>(
+            &req.path,
+            ctx,
+            get_enip_segment_val!(segment_type),
+            done,
+        );
+        if r == 1 {
+            return 1;
         }
         if let EnipCipRequestPayload::Multiple(m) = &req.payload {
             for p in m.packet_list.iter() {
-                if enip_cip_match_segment(p, ctx, segment_type) == 1 {
+                if enip_cip_match_segment(p, ctx, segment_type, done) == 1 {
                     return 1;
                 }
             }
@@ -313,13 +331,13 @@ fn enip_cip_match_segment(
 }
 
 fn enip_tx_has_cip_segment(
-    tx: &EnipTransaction, ctx: &DetectUintData<u32>, segment_type: u8,
+    tx: &EnipTransaction, ctx: &DetectUintArrayData<u32>, segment_type: u8,
 ) -> std::os::raw::c_int {
     if let Some(pdu) = &tx.request {
         if let EnipPayload::Cip(c) = &pdu.payload {
             for item in c.items.iter() {
                 if let EnipItemPayload::Data(d) = &item.payload {
-                    return enip_cip_match_segment(&d.cip, ctx, segment_type);
+                    return enip_cip_match_segment(&d.cip, ctx, segment_type, tx.done);
                 }
             }
         }
@@ -327,49 +345,65 @@ fn enip_tx_has_cip_segment(
     return 0;
 }
 
-fn enip_cip_match_attribute(d: &CipData, ctx: &DetectUintData<u32>) -> std::os::raw::c_int {
+fn enip_cip_match_attribute(
+    d: &CipData, ctx: &DetectUintArrayData<u32>, done: bool,
+) -> std::os::raw::c_int {
     if let CipDir::Request(req) = &d.cipdir {
+        let mut vals = Vec::new();
         for seg in req.path.iter() {
-            if seg.segment_type >> 2 == 12 && detect_match_uint(ctx, seg.value) {
-                return 1;
+            if seg.segment_type >> 2 == 12 {
+                if ctx.index != DetectUintIndex::Any {
+                    vals.push(seg.value);
+                } else if detect_match_uint(&ctx.du, seg.value) {
+                    return 1;
+                }
             }
         }
         match &req.payload {
             EnipCipRequestPayload::GetAttributeList(ga) => {
                 for attrg in ga.attr_list.iter() {
-                    if detect_match_uint(ctx, (*attrg).into()) {
+                    if ctx.index != DetectUintIndex::Any {
+                        vals.push((*attrg).into());
+                    } else if detect_match_uint(&ctx.du, (*attrg).into()) {
                         return 1;
                     }
                 }
             }
             EnipCipRequestPayload::SetAttributeList(sa) => {
                 if let Some(val) = sa.first_attr {
-                    if detect_match_uint(ctx, val.into()) {
+                    if ctx.index != DetectUintIndex::Any {
+                        vals.push(val.into());
+                    } else if detect_match_uint(&ctx.du, val.into()) {
                         return 1;
                     }
                 }
             }
             EnipCipRequestPayload::Multiple(m) => {
                 for p in m.packet_list.iter() {
-                    if enip_cip_match_attribute(p, ctx) == 1 {
+                    // treat each array independently
+                    if enip_cip_match_attribute(p, ctx, done) == 1 {
                         return 1;
                     }
                 }
             }
             _ => {}
         }
+        if ctx.index != DetectUintIndex::Any {
+            return detect_uint_match_at_index::<u32, u32>(&vals, ctx, |v| Some(*v), done);
+        }
     }
     return 0;
 }
 
 fn enip_tx_has_cip_attribute(
-    tx: &EnipTransaction, ctx: &DetectUintData<u32>,
+    tx: &EnipTransaction, ctx: &DetectUintArrayData<u32>,
 ) -> std::os::raw::c_int {
     if let Some(pdu) = &tx.request {
         if let EnipPayload::Cip(c) = &pdu.payload {
             for item in c.items.iter() {
                 if let EnipItemPayload::Data(d) = &item.payload {
-                    return enip_cip_match_attribute(&d.cip, ctx);
+                    // there should be only one EnipItemPayload item
+                    return enip_cip_match_attribute(&d.cip, ctx, tx.done);
                 }
             }
         }
@@ -553,7 +587,7 @@ unsafe extern "C" fn cip_attribute_setup(
     if SCDetectSignatureSetAppProto(s, ALPROTO_ENIP) != 0 {
         return -1;
     }
-    let ctx = SCDetectU32Parse(raw) as *mut c_void;
+    let ctx = SCDetectU32ArrayParse(raw) as *mut c_void;
     if ctx.is_null() {
         return -1;
     }
@@ -577,14 +611,14 @@ unsafe extern "C" fn cip_attribute_match(
     tx: *mut c_void, _sig: *const Signature, ctx: *const SigMatchCtx,
 ) -> c_int {
     let tx = cast_pointer!(tx, EnipTransaction);
-    let ctx = cast_pointer!(ctx, DetectUintData<u32>);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u32>);
     return enip_tx_has_cip_attribute(tx, ctx);
 }
 
 unsafe extern "C" fn cip_attribute_free(_de: *mut DetectEngineCtx, ctx: *mut c_void) {
     // Just unbox...
-    let ctx = cast_pointer!(ctx, DetectUintData<u32>);
-    SCDetectU32Free(ctx);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u32>);
+    SCDetectU32ArrayFree(ctx);
 }
 
 unsafe extern "C" fn cip_class_setup(
@@ -593,7 +627,7 @@ unsafe extern "C" fn cip_class_setup(
     if SCDetectSignatureSetAppProto(s, ALPROTO_ENIP) != 0 {
         return -1;
     }
-    let ctx = SCDetectU32Parse(raw) as *mut c_void;
+    let ctx = SCDetectU32ArrayParse(raw) as *mut c_void;
     if ctx.is_null() {
         return -1;
     }
@@ -617,14 +651,14 @@ unsafe extern "C" fn cip_class_match(
     tx: *mut c_void, _sig: *const Signature, ctx: *const SigMatchCtx,
 ) -> c_int {
     let tx = cast_pointer!(tx, EnipTransaction);
-    let ctx = cast_pointer!(ctx, DetectUintData<u32>);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u32>);
     return enip_tx_has_cip_segment(tx, ctx, 8);
 }
 
 unsafe extern "C" fn cip_class_free(_de: *mut DetectEngineCtx, ctx: *mut c_void) {
     // Just unbox...
-    let ctx = cast_pointer!(ctx, DetectUintData<u32>);
-    SCDetectU32Free(ctx);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u32>);
+    SCDetectU32ArrayFree(ctx);
 }
 
 unsafe extern "C" fn vendor_id_setup(
@@ -1206,7 +1240,7 @@ unsafe extern "C" fn cip_instance_setup(
     if SCDetectSignatureSetAppProto(s, ALPROTO_ENIP) != 0 {
         return -1;
     }
-    let ctx = SCDetectU32Parse(raw) as *mut c_void;
+    let ctx = SCDetectU32ArrayParse(raw) as *mut c_void;
     if ctx.is_null() {
         return -1;
     }
@@ -1230,14 +1264,14 @@ unsafe extern "C" fn cip_instance_match(
     tx: *mut c_void, _sig: *const Signature, ctx: *const SigMatchCtx,
 ) -> c_int {
     let tx = cast_pointer!(tx, EnipTransaction);
-    let ctx = cast_pointer!(ctx, DetectUintData<u32>);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u32>);
     return enip_tx_has_cip_segment(tx, ctx, 9);
 }
 
 unsafe extern "C" fn cip_instance_free(_de: *mut DetectEngineCtx, ctx: *mut c_void) {
     // Just unbox...
-    let ctx = cast_pointer!(ctx, DetectUintData<u32>);
-    SCDetectU32Free(ctx);
+    let ctx = cast_pointer!(ctx, DetectUintArrayData<u32>);
+    SCDetectU32ArrayFree(ctx);
 }
 
 unsafe extern "C" fn cip_extendedstatus_setup(
@@ -1350,17 +1384,18 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         name: b"cip_service\0".as_ptr() as *const libc::c_char,
         desc: b"match on CIP Service, and optionnally class and attribute\0".as_ptr()
             as *const libc::c_char,
-        url: b"/rules/enip-keyword.html#cip_service\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/enip-keyword.html#cip-service\0".as_ptr() as *const libc::c_char,
         AppLayerTxMatch: Some(cipservice_match),
         Setup: Some(cipservice_setup),
         Free: Some(cipservice_free),
         flags: 0,
     };
     G_ENIP_CIPSERVICE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CIPSERVICE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CIPSERVICE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"cip\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.capabilities\0".as_ptr() as *const libc::c_char,
@@ -1372,10 +1407,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_CAPABILITIES_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CAPABILITIES_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CAPABILITIES_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.capabilities\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.cip_attribute\0".as_ptr() as *const libc::c_char,
@@ -1387,10 +1423,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT32 | SIGMATCH_INFO_MULTI_UINT,
     };
     G_ENIP_CIP_ATTRIBUTE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CIP_ATTRIBUTE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CIP_ATTRIBUTE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.cip_attribute\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.cip_class\0".as_ptr() as *const libc::c_char,
@@ -1402,10 +1439,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT32 | SIGMATCH_INFO_MULTI_UINT,
     };
     G_ENIP_CIP_CLASS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CIP_CLASS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CIP_CLASS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.cip_class\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.vendor_id\0".as_ptr() as *const libc::c_char,
@@ -1417,10 +1455,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_VENDOR_ID_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_VENDOR_ID_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_VENDOR_ID_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.vendor_id\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.status\0".as_ptr() as *const libc::c_char,
@@ -1432,10 +1471,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT32 | SIGMATCH_INFO_ENUM_UINT,
     };
     G_ENIP_STATUS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_STATUS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_STATUS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.status\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.state\0".as_ptr() as *const libc::c_char,
@@ -1447,10 +1487,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT8,
     };
     G_ENIP_STATE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_STATE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_STATE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.state\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.serial\0".as_ptr() as *const libc::c_char,
@@ -1462,10 +1503,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT32,
     };
     G_ENIP_SERIAL_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_SERIAL_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_SERIAL_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.serial\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.revision\0".as_ptr() as *const libc::c_char,
@@ -1477,10 +1519,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_REVISION_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_REVISION_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_REVISION_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.revision\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.protocol_version\0".as_ptr() as *const libc::c_char,
@@ -1492,10 +1535,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_PROTOCOL_VERSION_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_PROTOCOL_VERSION_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_PROTOCOL_VERSION_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.protocol_version\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.product_code\0".as_ptr() as *const libc::c_char,
@@ -1507,25 +1551,27 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_PRODUCT_CODE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_PRODUCT_CODE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_PRODUCT_CODE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.product_code\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip_command\0".as_ptr() as *const libc::c_char,
         desc: b"rules for detecting EtherNet/IP command\0".as_ptr() as *const libc::c_char,
-        url: b"/rules/enip-keyword.html#enip_command\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/enip-keyword.html#enip-command\0".as_ptr() as *const libc::c_char,
         AppLayerTxMatch: Some(command_match),
         Setup: Some(command_setup),
         Free: Some(command_free),
         flags: SIGMATCH_INFO_UINT16 | SIGMATCH_INFO_ENUM_UINT,
     };
     G_ENIP_COMMAND_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_COMMAND_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_COMMAND_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.command\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.identity_status\0".as_ptr() as *const libc::c_char,
@@ -1537,10 +1583,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_IDENTITY_STATUS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_IDENTITY_STATUS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_IDENTITY_STATUS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.identity_status\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.device_type\0".as_ptr() as *const libc::c_char,
@@ -1552,10 +1599,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_DEVICE_TYPE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_DEVICE_TYPE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_DEVICE_TYPE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.device_type\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.cip_status\0".as_ptr() as *const libc::c_char,
@@ -1564,13 +1612,14 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         AppLayerTxMatch: Some(cip_status_match),
         Setup: Some(cip_status_setup),
         Free: Some(cip_status_free),
-        flags: SIGMATCH_INFO_UINT8 | SIGMATCH_INFO_MULTI_UINT,
+        flags: SIGMATCH_INFO_UINT8,
     };
     G_ENIP_CIP_STATUS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CIP_STATUS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CIP_STATUS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.cip_status\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.cip_instance\0".as_ptr() as *const libc::c_char,
@@ -1582,10 +1631,11 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         flags: SIGMATCH_INFO_UINT32 | SIGMATCH_INFO_MULTI_UINT,
     };
     G_ENIP_CIP_INSTANCE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CIP_INSTANCE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CIP_INSTANCE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.cip_instance\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"enip.cip_extendedstatus\0".as_ptr() as *const libc::c_char,
@@ -1595,13 +1645,14 @@ pub unsafe extern "C" fn SCDetectEnipRegister() {
         AppLayerTxMatch: Some(cip_extendedstatus_match),
         Setup: Some(cip_extendedstatus_setup),
         Free: Some(cip_extendedstatus_free),
-        flags: SIGMATCH_INFO_UINT16 | SIGMATCH_INFO_MULTI_UINT,
+        flags: SIGMATCH_INFO_UINT16,
     };
     G_ENIP_CIP_EXTENDEDSTATUS_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_ENIP_CIP_EXTENDEDSTATUS_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_ENIP_CIP_EXTENDEDSTATUS_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"enip.cip_extendedstatus\0".as_ptr() as *const libc::c_char,
         ALPROTO_ENIP,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        0,
     );
     let kw = SigTableElmtStickyBuffer {
         name: String::from("enip.product_name"),

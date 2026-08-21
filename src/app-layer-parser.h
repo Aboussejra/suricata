@@ -39,28 +39,14 @@ typedef enum LoggerId LoggerId;
 // Forward declarations from util-file.h
 typedef struct AppLayerGetFileState AppLayerGetFileState;
 
-/* Flags for AppLayerParserState. */
-// flag available                               BIT_U16(0)
-#define APP_LAYER_PARSER_NO_INSPECTION         BIT_U16(1)
-#define APP_LAYER_PARSER_NO_REASSEMBLY         BIT_U16(2)
-#define APP_LAYER_PARSER_NO_INSPECTION_PAYLOAD BIT_U16(3)
-#define APP_LAYER_PARSER_BYPASS_READY          BIT_U16(4)
-#define APP_LAYER_PARSER_EOF_TS                BIT_U16(5)
-#define APP_LAYER_PARSER_EOF_TC                BIT_U16(6)
-/* 2x vacancy */
-#define APP_LAYER_PARSER_SFRAME_TS             BIT_U16(9)
-#define APP_LAYER_PARSER_SFRAME_TC             BIT_U16(10)
-
-/* Flags for AppLayerParserProtoCtx. */
-#define APP_LAYER_PARSER_OPT_ACCEPT_GAPS BIT_U32(0)
-
 #define APP_LAYER_PARSER_INT_STREAM_DEPTH_SET   BIT_U32(0)
 
 /* for use with the detect_progress_ts|detect_progress_tc fields */
 
 /** should inspection be skipped in that direction */
-#define APP_LAYER_TX_SKIP_INSPECT_TS BIT_U8(0)
-#define APP_LAYER_TX_SKIP_INSPECT_TC BIT_U8(1)
+// defined in rust
+// #define APP_LAYER_TX_SKIP_INSPECT_TS BIT_U8(0)
+// #define APP_LAYER_TX_SKIP_INSPECT_TC BIT_U8(1)
 /** is tx fully inspected? */
 #define APP_LAYER_TX_INSPECTED_TS BIT_U8(2)
 #define APP_LAYER_TX_INSPECTED_TC BIT_U8(3)
@@ -84,6 +70,9 @@ typedef struct AppLayerGetFileState AppLayerGetFileState;
 #define APP_LAYER_INCOMPLETE(c,n) (AppLayerResult) { 1, (c), (n) }
 
 int AppLayerParserProtoIsRegistered(uint8_t ipproto, AppProto alproto);
+
+/** progress values need to stay under this. */
+#define APP_LAYER_MAX_PROGRESS 48
 
 /***** transaction handling *****/
 
@@ -215,6 +204,16 @@ typedef struct AppLayerTxData {
     uint8_t detect_progress_ts;
     uint8_t detect_progress_tc;
 
+    /// Type of transaction. Meaning is defined by the parser. Used to
+    /// select a state machine. 0 means it is not used.
+    uint8_t tx_type;
+    /// End of TX progress values
+    ///
+    /// toserver end of tx progress value
+    uint8_t tx_type_eop_ts;
+    /// toclient end of tx progress value
+    uint8_t tx_type_eop_tc;
+
     DetectEngineState *de_state;
     AppLayerDecoderEvents *events;
     GenericVar *txbits;
@@ -296,6 +295,11 @@ void AppLayerParserRegisterGetStateFuncs(uint8_t ipproto, AppProto alproto,
         AppLayerParserGetStateIdByNameFn GetStateIdByName,
         AppLayerParserGetStateNameByIdFn GetStateNameById);
 
+/** \brief register state<>name funcs for a substate */
+void SCAppLayerParserRegisterGetTxSubStateFuncs(AppProto alproto, const uint8_t sub_state,
+        AppLayerParserGetStateIdByNameFn GetIdByNameFunc,
+        AppLayerParserGetStateNameByIdFn GetNameByIdFunc);
+
 void AppLayerParserRegisterTxDataFunc(uint8_t ipproto, AppProto alproto,
         AppLayerTxData *(*GetTxData)(void *tx));
 void AppLayerParserRegisterApplyTxConfigFunc(uint8_t ipproto, AppProto alproto,
@@ -328,7 +332,15 @@ int AppLayerParserGetStateProgress(uint8_t ipproto, AppProto alproto,
                         void *alstate, uint8_t direction);
 uint64_t AppLayerParserGetTxCnt(const Flow *, void *alstate);
 void *AppLayerParserGetTx(uint8_t ipproto, AppProto alproto, void *alstate, uint64_t tx_id);
-int AppLayerParserGetStateProgressCompletionStatus(AppProto alproto, uint8_t direction);
+int8_t AppLayerParserGetSubStateProgressId(
+        const AppProto alproto, const uint8_t sub_state, const char *state, const uint8_t dir_flag);
+const char *AppLayerParserGetSubStateProgressName(const AppProto alproto, const uint8_t sub_state,
+        const uint8_t state, const uint8_t dir_flag);
+uint8_t AppLayerParserGetSubStateCompletion(const AppProto alproto, const uint8_t sub_state);
+uint8_t AppLayerParserGetStateProgressCompletionStatus(AppProto alproto, uint8_t direction);
+const char *AppLayerParserGetSubStateName(const AppProto alproto, const uint8_t sub_state);
+uint8_t AppLayerParserGetMaxSubState(const AppProto alproto);
+bool AppLayerParserSupportsSubStates(const AppProto alproto);
 int AppLayerParserGetEventInfo(uint8_t ipproto, AppProto alproto, const char *event_name,
         uint8_t *event_id, AppLayerEventType *event_type);
 int AppLayerParserGetEventInfoById(uint8_t ipproto, AppProto alproto, uint8_t event_id,

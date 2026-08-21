@@ -44,6 +44,7 @@
 #include "util-affinity.h"
 #include "util-cpu.h"
 #include "util-device-private.h"
+#include "util-host-info.h"
 
 #include "device-storage.h"
 #include "flow-storage.h"
@@ -58,10 +59,8 @@
 
 #define BPF_MAP_MAX_COUNT 16
 
-#define BYPASSED_FLOW_TIMEOUT   60
-
-static LiveDevStorageId g_livedev_storage_id = { .id = -1 };
-static FlowStorageId g_flow_storage_id = { .id = -1 };
+static SCLiveDevStorageId g_livedev_storage_id = { .id = -1 };
+static SCFlowStorageId g_flow_storage_id = { .id = -1 };
 
 struct bpf_map_item {
     char iface[IFNAMSIZ];
@@ -134,7 +133,7 @@ static struct bpf_maps_info *EBPFGetBpfMap(const char *iface)
     LiveDevice *livedev = LiveGetDevice(iface);
     if (livedev == NULL)
         return NULL;
-    void *data = LiveDevGetStorageById(livedev, g_livedev_storage_id);
+    void *data = SCLiveDevGetStorageById(livedev, g_livedev_storage_id);
 
     return (struct bpf_maps_info *)data;
 }
@@ -268,7 +267,7 @@ static int EBPFLoadPinnedMaps(LiveDevice *livedev, struct ebpf_timeout_config *c
     }
 
     /* Attach the bpf_maps_info to the LiveDevice via the device storage */
-    LiveDevSetStorageById(livedev, g_livedev_storage_id, bpf_map_data);
+    SCLiveDevSetStorageById(livedev, g_livedev_storage_id, bpf_map_data);
     /* Declare that device will use bypass stats */
     LiveDevUseBypass(livedev);
 
@@ -323,12 +322,15 @@ int EBPFLoadFile(const char *iface, const char *path, const char * section,
         return -1;
     }
 
-    /* Sending the eBPF code to the kernel requires a large amount of
-     * locked memory so we set it to unlimited to avoid a ENOPERM error */
-    struct rlimit r = {RLIM_INFINITY, RLIM_INFINITY};
-    if (setrlimit(RLIMIT_MEMLOCK, &r) != 0) {
-        SCLogError("Unable to lock memory: %s (%d)", strerror(errno), errno);
-        return -1;
+    /* Since kernel 5.11 BPF map memory is memcg-accounted and no longer
+     * charged against RLIMIT_MEMLOCK (https://lwn.net/Articles/829307/), so
+     * raising the limit is only needed on older kernels. Raising it requires CAP_SYS_RESOURCE */
+    if (!SCKernelVersionIsAtLeast(5, 11)) {
+        struct rlimit r = { RLIM_INFINITY, RLIM_INFINITY };
+        if (setrlimit(RLIMIT_MEMLOCK, &r) != 0) {
+            SCLogError("Unable to lock memory: %s (%d)", strerror(errno), errno);
+            return -1;
+        }
     }
 
     /* Open the eBPF file and parse it */
@@ -457,7 +459,7 @@ int EBPFLoadFile(const char *iface, const char *path, const char * section,
     }
 
     /* Attach the bpf_maps_info to the LiveDevice via the device storage */
-    LiveDevSetStorageById(livedev, g_livedev_storage_id, bpf_map_data);
+    SCLiveDevSetStorageById(livedev, g_livedev_storage_id, bpf_map_data);
     LiveDevUseBypass(livedev);
 
     /* Finally we get the file descriptor for our eBPF program. We will use
@@ -527,17 +529,17 @@ static bool EBPFCreateFlowForKey(struct flows_stats *flowstats, LiveDevice *dev,
      * serve them if we already have something from server to client. We need
      * these numbers as we will use it to see if we have new traffic coming
      * on the flow */
-    FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
+    FlowBypassInfo *fc = SCFlowGetStorageById(f, GetFlowBypassInfoID());
     if (fc == NULL) {
         fc = SCCalloc(sizeof(FlowBypassInfo), 1);
         if (fc) {
             FlowUpdateState(f, FLOW_STATE_CAPTURE_BYPASSED);
-            FlowSetStorageById(f, GetFlowBypassInfoID(), fc);
+            SCFlowSetStorageById(f, GetFlowBypassInfoID(), fc);
             fc->BypassUpdate = EBPFBypassUpdate;
             fc->BypassFree = EBPFBypassFree;
             fc->todstpktcnt = pkts_cnt;
             fc->todstbytecnt = bytes_cnt;
-            f->livedev = dev;
+            f->livedev_id = dev->id;
             EBPFBypassData *eb = SCCalloc(1, sizeof(EBPFBypassData));
             if (eb == NULL) {
                 SCFree(fc);
@@ -583,7 +585,7 @@ static bool EBPFCreateFlowForKey(struct flows_stats *flowstats, LiveDevice *dev,
         memcpy(mkey, key, skey);
         eb->key[1] = mkey;
     }
-    f->livedev = dev;
+    f->livedev_id = dev->id;
     FLOWLOCK_UNLOCK(f);
     return false;
 }
@@ -659,7 +661,7 @@ bool EBPFBypassUpdate(Flow *f, void *data, time_t tsec)
     if (eb == NULL) {
         return false;
     }
-    FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
+    FlowBypassInfo *fc = SCFlowGetStorageById(f, GetFlowBypassInfoID());
     if (fc == NULL) {
         return false;
     }
@@ -929,8 +931,8 @@ int EBPFCheckBypassedFlowCreate(ThreadVars *th_v, struct timespec *curtime, void
 
 void EBPFRegisterExtension(void)
 {
-    g_livedev_storage_id = LiveDevStorageRegister("bpfmap", sizeof(void *), NULL, BpfMapsInfoFree);
-    g_flow_storage_id = FlowStorageRegister("bypassedlist", sizeof(void *), NULL, BypassedListFree);
+    g_livedev_storage_id = SCLiveDevStorageRegister("bpfmap", BpfMapsInfoFree);
+    g_flow_storage_id = SCFlowStorageRegister("bypassedlist", BypassedListFree);
 }
 
 
@@ -1049,20 +1051,20 @@ int EBPFSetPeerIface(const char *iface, const char *out_iface)
 
 int EBPFUpdateFlow(Flow *f, Packet *p, void *data)
 {
-    BypassedIfaceList *ifl = (BypassedIfaceList *)FlowGetStorageById(f, g_flow_storage_id);
+    BypassedIfaceList *ifl = (BypassedIfaceList *)SCFlowGetStorageById(f, g_flow_storage_id);
     if (ifl == NULL) {
         ifl = SCCalloc(1, sizeof(*ifl));
         if (ifl == NULL) {
             return 0;
         }
-        ifl->dev = p->livedev;
-        FlowSetStorageById(f, g_flow_storage_id, ifl);
+        ifl->dev = LiveDeviceGetById(p->livedev_id);
+        SCFlowSetStorageById(f, g_flow_storage_id, ifl);
         return 1;
     }
     /* Look for packet iface in the list */
     BypassedIfaceList *ldev = ifl;
     while (ldev) {
-        if (p->livedev == ldev->dev) {
+        if (p->livedev_id == LiveDeviceGetId(ldev->dev)) {
             return 1;
         }
         ldev = ldev->next;
@@ -1075,9 +1077,9 @@ int EBPFUpdateFlow(Flow *f, Packet *p, void *data)
     if (nifl == NULL) {
         return 0;
     }
-    nifl->dev = p->livedev;
+    nifl->dev = LiveDeviceGetById(p->livedev_id);
     nifl->next = ifl;
-    FlowSetStorageById(f, g_flow_storage_id, nifl);
+    SCFlowSetStorageById(f, g_flow_storage_id, nifl);
     return 1;
 }
 

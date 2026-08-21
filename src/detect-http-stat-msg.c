@@ -77,9 +77,9 @@ static InspectionBuffer *GetData2(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f, const uint8_t _flow_flags, void *txv,
         const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, (const uint8_t *)"", 0, transforms);
     }
 
@@ -117,10 +117,11 @@ void DetectHttpStatMsgRegister (void)
     DetectAppLayerMpmRegister("http_stat_msg", SIG_FLAG_TOCLIENT, 3, PrefilterGenericMpmRegister,
             GetData, ALPROTO_HTTP1, HTP_RESPONSE_PROGRESS_LINE);
 
-    DetectAppLayerInspectEngineRegister("http_stat_msg", ALPROTO_HTTP2, SIG_FLAG_TOCLIENT,
-            HTTP2StateDataServer, DetectEngineInspectBufferGeneric, GetData2);
-    DetectAppLayerMpmRegister("http_stat_msg", SIG_FLAG_TOCLIENT, 2, PrefilterGenericMpmRegister,
-            GetData2, ALPROTO_HTTP2, HTTP2StateDataServer);
+    DetectAppLayerInspectEngineRegisterSubState("http_stat_msg", ALPROTO_HTTP2, SIG_FLAG_TOCLIENT,
+            HTTP2TxTypeStream, HTTP2ProgStarted, DetectEngineInspectBufferGeneric, GetData2);
+    DetectAppLayerMpmRegisterSubState("http_stat_msg", SIG_FLAG_TOCLIENT, 2,
+            PrefilterGenericMpmRegister, GetData2, ALPROTO_HTTP2, HTTP2TxTypeStream,
+            HTTP2ProgStarted);
 
     DetectBufferTypeSetDescriptionByName("http_stat_msg",
             "http response status message");
@@ -169,7 +170,7 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
 {
     SCEnter();
 
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         htp_tx_t *tx = (htp_tx_t *)txv;
 
@@ -179,7 +180,7 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
         const uint32_t data_len = (uint32_t)bstr_len(htp_tx_response_message(tx));
         const uint8_t *data = bstr_ptr(htp_tx_response_message(tx));
 
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, data, data_len, transforms);
     }
 

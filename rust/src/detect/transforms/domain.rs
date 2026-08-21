@@ -18,8 +18,8 @@
 use crate::detect::SIGMATCH_NOOPT;
 use suricata_sys::sys::{
     DetectEngineCtx, DetectEngineThreadCtx, InspectionBuffer, SCDetectHelperTransformRegister,
-    SCDetectSignatureAddTransform, SCTransformTableElmt, Signature, SCInspectionBufferCheckAndExpand,
-    SCInspectionBufferTruncate,
+    SCDetectSignatureAddTransform, SCInspectionBufferCheckAndExpand, SCInspectionBufferTruncate,
+    SCTransformTableElmt, Signature,
 };
 
 use std::os::raw::{c_int, c_void};
@@ -45,7 +45,7 @@ fn get_domain(input: &[u8], output: &mut [u8]) -> u32 {
 }
 
 unsafe extern "C" fn domain_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *const c_void,
 ) {
     let input = (*buffer).inspect;
     let input_len = (*buffer).inspect_len;
@@ -84,7 +84,7 @@ fn get_tld(input: &[u8], output: &mut [u8]) -> u32 {
 }
 
 unsafe extern "C" fn tld_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *const c_void,
 ) {
     let input = (*buffer).inspect;
     let input_len = (*buffer).inspect_len;

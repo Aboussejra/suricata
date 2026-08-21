@@ -194,10 +194,7 @@ static bool GetMimeEmailUrlData(DetectEngineThreadCtx *det_ctx, const void *txv,
         return false;
     }
 
-    if (SCDetectMimeEmailGetUrl(tx->mime_state, buf, buf_len, idx) != 1) {
-        return false;
-    }
-    return true;
+    return SCDetectMimeEmailGetUrl(tx->mime_state, buf, buf_len, idx) == 1;
 }
 
 static int DetectMimeEmailReceivedSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
@@ -220,10 +217,7 @@ static bool GetMimeEmailReceivedData(DetectEngineThreadCtx *det_ctx, const void 
         return false;
     }
 
-    if (SCDetectMimeEmailGetDataArray(tx->mime_state, buf, buf_len, "received", idx) != 1) {
-        return false;
-    }
-    return true;
+    return SCDetectMimeEmailGetDataArray(tx->mime_state, buf, buf_len, "received", idx) == 1;
 }
 
 int DETECT_EMAIL_BODY_MD5 = 0;
@@ -262,97 +256,103 @@ void DetectEmailRegister(void)
 
     kw.name = "email.from";
     kw.desc = "'From' field from an email";
-    kw.url = "/rules/email-keywords.html#email.from";
+    kw.url = "/rules/email-keywords.html#email-from";
     kw.Setup = DetectMimeEmailFromSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_from_buffer_id = SCDetectHelperBufferMpmRegister(
-            "email.from", "MIME EMAIL FROM", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailFromData);
+    g_mime_email_from_buffer_id =
+            SCDetectHelperBufferProgressMpmRegister("email.from", "MIME EMAIL FROM", ALPROTO_SMTP,
+                    STREAM_TOSERVER, GetMimeEmailFromData, SMTP_REQUEST_DATA);
 
     kw.name = "email.subject";
     kw.desc = "'Subject' field from an email";
-    kw.url = "/rules/email-keywords.html#email.subject";
+    kw.url = "/rules/email-keywords.html#email-subject";
     kw.Setup = DetectMimeEmailSubjectSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_subject_buffer_id = SCDetectHelperBufferMpmRegister("email.subject",
-            "MIME EMAIL SUBJECT", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailSubjectData);
+    g_mime_email_subject_buffer_id =
+            SCDetectHelperBufferProgressMpmRegister("email.subject", "MIME EMAIL SUBJECT",
+                    ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailSubjectData, SMTP_REQUEST_DATA);
 
     kw.name = "email.to";
     kw.desc = "'To' field from an email";
-    kw.url = "/rules/email-keywords.html#email.to";
+    kw.url = "/rules/email-keywords.html#email-to";
     kw.Setup = DetectMimeEmailToSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_to_buffer_id = SCDetectHelperBufferMpmRegister(
-            "email.to", "MIME EMAIL TO", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailToData);
+    g_mime_email_to_buffer_id = SCDetectHelperBufferProgressMpmRegister("email.to", "MIME EMAIL TO",
+            ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailToData, SMTP_REQUEST_DATA);
 
     kw.name = "email.cc";
     kw.desc = "'Cc' field from an email";
-    kw.url = "/rules/email-keywords.html#email.cc";
+    kw.url = "/rules/email-keywords.html#email-cc";
     kw.Setup = DetectMimeEmailCcSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_cc_buffer_id = SCDetectHelperBufferMpmRegister(
-            "email.cc", "MIME EMAIL CC", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailCcData);
+    g_mime_email_cc_buffer_id = SCDetectHelperBufferProgressMpmRegister("email.cc", "MIME EMAIL CC",
+            ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailCcData, SMTP_REQUEST_DATA);
 
     kw.name = "email.date";
     kw.desc = "'Date' field from an email";
-    kw.url = "/rules/email-keywords.html#email.date";
+    kw.url = "/rules/email-keywords.html#email-date";
     kw.Setup = DetectMimeEmailDateSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_date_buffer_id = SCDetectHelperBufferMpmRegister(
-            "email.date", "MIME EMAIL DATE", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailDateData);
+    g_mime_email_date_buffer_id =
+            SCDetectHelperBufferProgressMpmRegister("email.date", "MIME EMAIL DATE", ALPROTO_SMTP,
+                    STREAM_TOSERVER, GetMimeEmailDateData, SMTP_REQUEST_DATA);
 
     kw.name = "email.message_id";
     kw.desc = "'Message-Id' field from an email";
-    kw.url = "/rules/email-keywords.html#email.message_id";
+    kw.url = "/rules/email-keywords.html#email-message-id";
     kw.Setup = DetectMimeEmailMessageIdSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_message_id_buffer_id = SCDetectHelperBufferMpmRegister("email.message_id",
-            "MIME EMAIL Message-Id", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailMessageIdData);
+    g_mime_email_message_id_buffer_id =
+            SCDetectHelperBufferProgressMpmRegister("email.message_id", "MIME EMAIL Message-Id",
+                    ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailMessageIdData, SMTP_REQUEST_DATA);
 
     kw.name = "email.x_mailer";
     kw.desc = "'X-Mailer' field from an email";
-    kw.url = "/rules/email-keywords.html#email.x_mailer";
+    kw.url = "/rules/email-keywords.html#email-x-mailer";
     kw.Setup = DetectMimeEmailXMailerSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_x_mailer_buffer_id = SCDetectHelperBufferMpmRegister("email.x_mailer",
-            "MIME EMAIL X-Mailer", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailXMailerData);
+    g_mime_email_x_mailer_buffer_id =
+            SCDetectHelperBufferProgressMpmRegister("email.x_mailer", "MIME EMAIL X-Mailer",
+                    ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailXMailerData, SMTP_REQUEST_DATA);
 
     kw.name = "email.url";
     kw.desc = "'Url' extracted from an email";
-    kw.url = "/rules/email-keywords.html#email.url";
+    kw.url = "/rules/email-keywords.html#email-url";
     kw.Setup = DetectMimeEmailUrlSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER | SIGMATCH_INFO_MULTI_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_url_buffer_id = SCDetectHelperMultiBufferMpmRegister(
-            "email.url", "MIME EMAIL URL", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailUrlData);
+    g_mime_email_url_buffer_id =
+            SCDetectHelperMultiBufferProgressMpmRegister("email.url", "MIME EMAIL URL",
+                    ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailUrlData, SMTP_REQUEST_DATA);
 
     kw.name = "email.received";
     kw.desc = "'Received' field from an email";
-    kw.url = "/rules/email-keywords.html#email.received";
+    kw.url = "/rules/email-keywords.html#email-received";
     kw.Setup = DetectMimeEmailReceivedSetup;
     kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER | SIGMATCH_INFO_MULTI_BUFFER;
     SCDetectHelperKeywordRegister(&kw);
-    g_mime_email_received_buffer_id = SCDetectHelperMultiBufferMpmRegister("email.received",
-            "MIME EMAIL RECEIVED", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailReceivedData);
+    g_mime_email_received_buffer_id =
+            SCDetectHelperMultiBufferProgressMpmRegister("email.received", "MIME EMAIL RECEIVED",
+                    ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailReceivedData, SMTP_REQUEST_DATA);
 
     if (!MimeBodyMd5IsDisabled()) {
         // do not register the keyword if explicitly disabled
         kw.name = "email.body_md5";
         kw.desc = "'md5' hash generated from an email body";
-        kw.url = "/rules/email-keywords.html#email.body_md5";
+        kw.url = "/rules/email-keywords.html#email-body-md5";
         kw.Setup = DetectMimeEmailBodyMd5Setup;
         kw.flags = SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER;
         DETECT_EMAIL_BODY_MD5 = SCDetectHelperKeywordRegister(&kw);
-        // We do not need a progress because SMTP tx has only progress 0 or 1
-        // even if we have a MimeSmtpMd5State enumeration
-        g_mime_email_body_md5_buffer_id = SCDetectHelperBufferMpmRegister("email.body_md5",
-                "MIME EMAIL BODY MD5", ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailBodyMd5Data);
+        g_mime_email_body_md5_buffer_id =
+                SCDetectHelperBufferProgressMpmRegister("email.body_md5", "MIME EMAIL BODY MD5",
+                        ALPROTO_SMTP, STREAM_TOSERVER, GetMimeEmailBodyMd5Data, SMTP_REQUEST_DATA);
         DetectBufferTypeRegisterValidateCallback("email.body_md5", DetectMd5ValidateCallback);
     }
 }

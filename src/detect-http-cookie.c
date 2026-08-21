@@ -67,6 +67,7 @@ static int DetectHttpCookieSetupSticky (DetectEngineCtx *, Signature *, const ch
 static void DetectHttpCookieRegisterTests(void);
 #endif
 static int g_http_cookie_buffer_id = 0;
+static int g_http2_thread_id = 0;
 
 static InspectionBuffer *GetRequestData(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms,
@@ -118,18 +119,24 @@ void DetectHttpCookieRegister(void)
     DetectAppLayerMpmRegister("http_cookie", SIG_FLAG_TOCLIENT, 2, PrefilterGenericMpmRegister,
             GetResponseData, ALPROTO_HTTP1, HTP_REQUEST_PROGRESS_HEADERS);
 
-    DetectAppLayerInspectEngineRegister("http_cookie", ALPROTO_HTTP2, SIG_FLAG_TOSERVER,
-            HTTP2StateDataClient, DetectEngineInspectBufferGeneric, GetRequestData2);
-    DetectAppLayerInspectEngineRegister("http_cookie", ALPROTO_HTTP2, SIG_FLAG_TOCLIENT,
-            HTTP2StateDataServer, DetectEngineInspectBufferGeneric, GetResponseData2);
+    DetectAppLayerInspectEngineRegisterSubState("http_cookie", ALPROTO_HTTP2, SIG_FLAG_TOSERVER,
+            HTTP2TxTypeStream, HTTP2ProgHeaders, DetectEngineInspectBufferGeneric, GetRequestData2);
+    DetectAppLayerInspectEngineRegisterSubState("http_cookie", ALPROTO_HTTP2, SIG_FLAG_TOCLIENT,
+            HTTP2TxTypeStream, HTTP2ProgHeaders, DetectEngineInspectBufferGeneric,
+            GetResponseData2);
 
-    DetectAppLayerMpmRegister("http_cookie", SIG_FLAG_TOSERVER, 2, PrefilterGenericMpmRegister,
-            GetRequestData2, ALPROTO_HTTP2, HTTP2StateDataClient);
-    DetectAppLayerMpmRegister("http_cookie", SIG_FLAG_TOCLIENT, 2, PrefilterGenericMpmRegister,
-            GetResponseData2, ALPROTO_HTTP2, HTTP2StateDataServer);
+    DetectAppLayerMpmRegisterSubState("http_cookie", SIG_FLAG_TOSERVER, 2,
+            PrefilterGenericMpmRegister, GetRequestData2, ALPROTO_HTTP2, HTTP2TxTypeStream,
+            HTTP2ProgHeaders);
+    DetectAppLayerMpmRegisterSubState("http_cookie", SIG_FLAG_TOCLIENT, 2,
+            PrefilterGenericMpmRegister, GetResponseData2, ALPROTO_HTTP2, HTTP2TxTypeStream,
+            HTTP2ProgHeaders);
 
     DetectBufferTypeSetDescriptionByName("http_cookie",
             "http cookie header");
+
+    g_http2_thread_id = SCDetectRegisterThreadCtxGlobalFuncs(
+            "http_cookie", SCDetectThreadBufDataInit, NULL, SCDetectThreadBufDataFree);
 
     g_http_cookie_buffer_id = DetectBufferTypeGetByName("http_cookie");
 }
@@ -175,7 +182,7 @@ static InspectionBuffer *GetRequestData(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f,
         const uint8_t _flow_flags, void *txv, const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         htp_tx_t *tx = (htp_tx_t *)txv;
 
@@ -191,7 +198,7 @@ static InspectionBuffer *GetRequestData(DetectEngineThreadCtx *det_ctx,
         const uint32_t data_len = (uint32_t)htp_header_value_len(h);
         const uint8_t *data = htp_header_value_ptr(h);
 
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, data, data_len, transforms);
     }
 
@@ -202,7 +209,7 @@ static InspectionBuffer *GetResponseData(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f,
         const uint8_t _flow_flags, void *txv, const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         htp_tx_t *tx = (htp_tx_t *)txv;
 
@@ -218,7 +225,7 @@ static InspectionBuffer *GetResponseData(DetectEngineThreadCtx *det_ctx,
         const uint32_t data_len = (uint32_t)htp_header_value_len(h);
         const uint8_t *data = htp_header_value_ptr(h);
 
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, data, data_len, transforms);
     }
 
@@ -229,17 +236,20 @@ static InspectionBuffer *GetRequestData2(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f, const uint8_t _flow_flags, void *txv,
         const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         uint32_t b_len = 0;
         const uint8_t *b = NULL;
 
-        if (SCHttp2TxGetCookie(txv, STREAM_TOSERVER, &b, &b_len) != 1)
+        void *thread_buf = SCDetectThreadCtxGetGlobalKeywordThreadCtx(det_ctx, g_http2_thread_id);
+        if (thread_buf == NULL)
+            return NULL;
+        if (SCHttp2TxGetCookie(txv, STREAM_TOSERVER, &b, &b_len, thread_buf) != 1)
             return NULL;
         if (b == NULL || b_len == 0)
             return NULL;
 
-        InspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
+        SCInspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
     }
 
     return buffer;
@@ -249,17 +259,20 @@ static InspectionBuffer *GetResponseData2(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f, const uint8_t _flow_flags, void *txv,
         const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         uint32_t b_len = 0;
         const uint8_t *b = NULL;
 
-        if (SCHttp2TxGetCookie(txv, STREAM_TOCLIENT, &b, &b_len) != 1)
+        void *thread_buf = SCDetectThreadCtxGetGlobalKeywordThreadCtx(det_ctx, g_http2_thread_id);
+        if (thread_buf == NULL)
+            return NULL;
+        if (SCHttp2TxGetCookie(txv, STREAM_TOCLIENT, &b, &b_len, thread_buf) != 1)
             return NULL;
         if (b == NULL || b_len == 0)
             return NULL;
 
-        InspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
+        SCInspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
     }
 
     return buffer;

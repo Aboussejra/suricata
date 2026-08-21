@@ -93,6 +93,19 @@ pub struct MimeStateSMTP<'a> {
     pub(crate) md5_result: String,
 }
 
+impl MimeStateSMTP<'_> {
+    fn restart(&mut self) {
+        self.state_flag = MimeSmtpParserState::MimeSmtpStart;
+        self.headers.truncate(self.main_headers_nb);
+        self.encoding = MimeSmtpEncoding::Plain;
+        self.decoder = None;
+        self.filename.clear();
+        self.bufeolen = 0;
+        self.content_type = MimeSmtpContentType::Message;
+        self.decoded_line.clear();
+    }
+}
+
 pub fn mime_smtp_state_init(
     files: &mut FileContainer, sbcfg: *const StreamingBufferConfig,
 ) -> Option<MimeStateSMTP<'_>> {
@@ -318,7 +331,8 @@ fn mime_smtp_find_url_strings(ctx: &mut MimeStateSMTP, input_new: &[u8]) {
     }
 
     let mut input = input_new;
-    // use previosly buffered beginning of line if any
+    let new_len = input.len();
+    // use previously buffered beginning of line if any
     if !ctx.decoded_line.is_empty() {
         ctx.decoded_line.extend_from_slice(input_new);
         input = &ctx.decoded_line;
@@ -334,7 +348,9 @@ fn mime_smtp_find_url_strings(ctx: &mut MimeStateSMTP, input_new: &[u8]) {
         if !ctx.decoded_line.is_empty() {
             ctx.decoded_line.clear()
         }
-    } else if let Some(x) = input.iter().rev().position(|&x| x == b'\n') {
+    } else if let Some(x) = input.iter().rev().take(new_len).position(|&x| x == b'\n') {
+        // take the position in the not-reversed list
+        let x = input.len() - 1 - x;
         input = &input[..x];
         mime_smtp_extract_urls(&mut ctx.urls, input);
         if !ctx.decoded_line.is_empty() {
@@ -375,8 +391,8 @@ fn mime_smtp_parse_line(
                     ctx.main_headers_nb = ctx.headers.len();
                 }
                 if encap_msg {
-                    ctx.state_flag = MimeSmtpParserState::MimeSmtpStart;
-                    ctx.headers.truncate(ctx.main_headers_nb);
+                    // looks like we have 0 headers...
+                    ctx.restart();
                     return (MimeSmtpParserResult::MimeSmtpNeedsMore, warnings);
                 }
                 ctx.state_flag = MimeSmtpParserState::MimeSmtpBody;
@@ -403,8 +419,7 @@ fn mime_smtp_parse_line(
                     ctx.main_headers_nb = ctx.headers.len();
                 }
                 if encap_msg {
-                    ctx.state_flag = MimeSmtpParserState::MimeSmtpStart;
-                    ctx.headers.truncate(ctx.main_headers_nb);
+                    ctx.restart();
                     return (MimeSmtpParserResult::MimeSmtpNeedsMore, warnings);
                 }
                 ctx.state_flag = MimeSmtpParserState::MimeSmtpBody;
@@ -458,15 +473,11 @@ fn mime_smtp_parse_line(
                             }
                         }
                     }
-                    ctx.state_flag = MimeSmtpParserState::MimeSmtpStart;
                     let toclose = !ctx.filename.is_empty();
-                    ctx.filename.clear();
-                    ctx.headers.truncate(ctx.main_headers_nb);
-                    ctx.encoding = MimeSmtpEncoding::Plain;
-                    ctx.bufeolen = 0;
                     if i.len() >= b.len() + 2 && i[b.len()] == b'-' && i[b.len() + 1] == b'-' {
                         ctx.boundaries.pop();
                     }
+                    ctx.restart();
                     if toclose {
                         return (MimeSmtpParserResult::MimeSmtpFileClose, 0);
                     }

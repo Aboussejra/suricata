@@ -229,8 +229,7 @@ static int JsonAnomalyTxLogger(ThreadVars *tv, void *thread_data, const Packet *
 
 static inline bool AnomalyHasParserEvents(const Packet *p)
 {
-    return (p->flow && p->flow->alparser &&
-            AppLayerParserHasDecoderEvents(p->flow->alparser));
+    return (p->flow && AppLayerParserHasDecoderEvents(p->flow->alparser));
 }
 
 static inline bool AnomalyHasPacketAppLayerEvents(const Packet *p)
@@ -269,14 +268,6 @@ static int AnomalyJson(ThreadVars *tv, JsonAnomalyLogThread *aft, const Packet *
     }
 
     return rc;
-}
-
-static int JsonAnomalyFlush(ThreadVars *tv, void *thread_data, const Packet *p)
-{
-    JsonAnomalyLogThread *aft = thread_data;
-    SCLogDebug("%s flushing %s", tv->name, ((LogFileCtx *)(aft->ctx->file_ctx))->filename);
-    OutputJsonFlush(aft->ctx);
-    return 0;
 }
 
 static int JsonAnomalyLogger(ThreadVars *tv, void *thread_data, const Packet *p)
@@ -457,7 +448,6 @@ void JsonAnomalyLogRegister (void)
 {
     OutputPacketLoggerFunctions output_logger_functions = {
         .LogFunc = JsonAnomalyLogger,
-        .FlushFunc = JsonAnomalyFlush,
         .ConditionFunc = JsonAnomalyLogCondition,
         .ThreadInitFunc = JsonAnomalyLogThreadInit,
         .ThreadDeinitFunc = JsonAnomalyLogThreadDeinit,

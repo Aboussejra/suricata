@@ -37,6 +37,8 @@ signature is emphasized below:
 .. note:: The following characters must be escaped inside the msg:
 	      ``;`` ``\`` ``"``
 
+.. _suricata-rules-sids:
+
 sid (signature ID)
 ------------------
 
@@ -57,8 +59,8 @@ Example of sid in a signature:
    provided as the last keyword (or second-to-last if there is a ``rev``)
    of the signature.
 
-   There are reserved ranges of sids, the reservations are recorded
-   at https://sidallocation.org/ .
+   **There are reserved ranges of sids, the reservations are recorded
+   at https://sidallocation.org/ .**
 
 .. Note::
 
@@ -68,6 +70,16 @@ Example of sid in a signature:
    As Suricata-update currently considers the rule's ``sid`` only (cf. `Bug#5447
    <https://redmine.openinfosecfoundation.org/issues/5447>`_), it is advisable
    to opt for a completely unique ``sid`` altogether.
+
+Suricata Engine Events Rules SID range
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Suricata provides signatures for engine events, bundled in the `rules`
+folder, in the `suricata` directory/repository.
+The full signature ID range for such rules is: 2200000 - 2299999.
+
+These sid ranges can be seen in the `rules README file
+<https://github.com/OISF/suricata/blob/main/rules/README.md>`_).
 
 rev (revision)
 --------------
@@ -106,7 +118,7 @@ has no technical implications, the value is only noted in alert data.
 Example of the gid value in an alert entry in the fast.log file.
 In the part [1:123], the first 1 is the gid (123 is the sid and 1 is the rev).
 
-.. container:: example-rule
+.. note::
 
     07/12/2022-21:59:26.713297  [**] [:example-rule-emphasis:`1`:123:1] HTTP GET Request Containing Rule in URI [**] [Classification: Potentially Bad Traffic] [Priority: 2] {TCP} 192.168.225.121:12407 -> 172.16.105.84:80
 

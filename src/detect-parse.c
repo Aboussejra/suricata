@@ -968,6 +968,16 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr, 
 #undef URL
     }
 
+    if (s->init_data->firewall_rule && (st->flags & SIGMATCH_BAN_FIREWALL_RULE) != 0) {
+        SCLogError("keyword \'%s\' is not allowed with firewall rules", optname);
+        goto error;
+    }
+
+    if (EngineModeIsFirewall() && (st->flags & SIGMATCH_BAN_FIREWALL_MODE) != 0) {
+        SCLogError("keyword \'%s\' is not allowed in firewall mode", optname);
+        goto error;
+    }
+
     int setup_ret = 0;
 
     /* Validate double quoting, trimming trailing white space along the way. */
@@ -1131,13 +1141,8 @@ error:
 
 static bool IsBuiltIn(const char *n)
 {
-    if (strcmp(n, "request_started") == 0 || strcmp(n, "response_started") == 0) {
-        return true;
-    }
-    if (strcmp(n, "request_complete") == 0 || strcmp(n, "response_complete") == 0) {
-        return true;
-    }
-    return false;
+    return strcmp(n, "request_started") == 0 || strcmp(n, "response_started") == 0 ||
+           strcmp(n, "request_complete") == 0 || strcmp(n, "response_complete") == 0;
 }
 
 /** \brief register app hooks as generic lists
@@ -1151,70 +1156,134 @@ static bool IsBuiltIn(const char *n)
 void DetectRegisterAppLayerHookLists(void)
 {
     for (AppProto a = ALPROTO_FAILED + 1; a < g_alproto_max; a++) {
-        const char *alproto_name = AppProtoToString(a);
-        if (strcmp(alproto_name, "http") == 0)
-            alproto_name = "http1";
+        const char *alproto_name = AppProtoToStringRaw(a);
         SCLogDebug("alproto %u/%s", a, alproto_name);
 
-        const int max_progress_ts =
-                AppLayerParserGetStateProgressCompletionStatus(a, STREAM_TOSERVER);
-        const int max_progress_tc =
-                AppLayerParserGetStateProgressCompletionStatus(a, STREAM_TOCLIENT);
+        if (AppLayerParserSupportsSubStates(a)) {
+            uint8_t max_sub_state = AppLayerParserGetMaxSubState(a);
+            SCLogDebug("%s: max sub state for %u is %u", alproto_name, a, max_sub_state);
+            for (uint8_t s = 1; s <= max_sub_state; s++) {
+                const uint8_t max_state = AppLayerParserGetSubStateCompletion(
+                        a, s); // TODO allow different completion per direction?
+                const char *sub_state_name = AppLayerParserGetSubStateName(a, s);
+                if (sub_state_name == NULL)
+                    continue;
 
-        char ts_tx_started[64];
-        snprintf(ts_tx_started, sizeof(ts_tx_started), "%s:request_started:generic", alproto_name);
-        DetectAppLayerInspectEngineRegister(
-                ts_tx_started, a, SIG_FLAG_TOSERVER, 0, DetectEngineInspectGenericList, NULL);
-        SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "request_name", ts_tx_started,
-                (uint32_t)strlen(ts_tx_started));
+                char ts_tx_started[64];
+                snprintf(ts_tx_started, sizeof(ts_tx_started), "%s:%s:request_started:generic",
+                        alproto_name, sub_state_name);
+                DetectAppLayerInspectEngineRegisterSubState(ts_tx_started, a, SIG_FLAG_TOSERVER, s,
+                        0, DetectEngineInspectGenericList, NULL);
 
-        char tc_tx_started[64];
-        snprintf(tc_tx_started, sizeof(tc_tx_started), "%s:response_started:generic", alproto_name);
-        DetectAppLayerInspectEngineRegister(
-                tc_tx_started, a, SIG_FLAG_TOCLIENT, 0, DetectEngineInspectGenericList, NULL);
-        SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "response_name", tc_tx_started,
-                (uint32_t)strlen(tc_tx_started));
+                char tc_tx_started[64];
+                snprintf(tc_tx_started, sizeof(tc_tx_started), "%s:%s:response_started:generic",
+                        alproto_name, sub_state_name);
+                DetectAppLayerInspectEngineRegisterSubState(tc_tx_started, a, SIG_FLAG_TOCLIENT, s,
+                        0, DetectEngineInspectGenericList, NULL);
 
-        char ts_tx_complete[64];
-        snprintf(ts_tx_complete, sizeof(ts_tx_complete), "%s:request_complete:generic",
-                alproto_name);
-        DetectAppLayerInspectEngineRegister(ts_tx_complete, a, SIG_FLAG_TOSERVER, max_progress_ts,
-                DetectEngineInspectGenericList, NULL);
-        SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "request_name", ts_tx_complete,
-                (uint32_t)strlen(ts_tx_complete));
+                char ts_tx_complete[64];
+                snprintf(ts_tx_complete, sizeof(ts_tx_complete), "%s:%s:request_complete:generic",
+                        alproto_name, sub_state_name);
+                DetectAppLayerInspectEngineRegisterSubState(ts_tx_complete, a, SIG_FLAG_TOSERVER, s,
+                        max_state, DetectEngineInspectGenericList, NULL);
 
-        char tc_tx_complete[64];
-        snprintf(tc_tx_complete, sizeof(tc_tx_complete), "%s:response_complete:generic",
-                alproto_name);
-        DetectAppLayerInspectEngineRegister(tc_tx_complete, a, SIG_FLAG_TOCLIENT, max_progress_tc,
-                DetectEngineInspectGenericList, NULL);
-        SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "response_name", tc_tx_complete,
-                (uint32_t)strlen(tc_tx_complete));
+                char tc_tx_complete[64];
+                snprintf(tc_tx_complete, sizeof(tc_tx_complete), "%s:%s:response_complete:generic",
+                        alproto_name, sub_state_name);
+                DetectAppLayerInspectEngineRegisterSubState(tc_tx_complete, a, SIG_FLAG_TOCLIENT, s,
+                        max_state, DetectEngineInspectGenericList, NULL);
 
-        for (int p = 0; p <= max_progress_ts; p++) {
-            const char *name = AppLayerParserGetStateNameById(
-                    IPPROTO_TCP /* TODO no ipproto */, a, p, STREAM_TOSERVER);
-            if (name != NULL && !IsBuiltIn(name)) {
-                char list_name[64];
-                snprintf(list_name, sizeof(list_name), "%s:%s:generic", alproto_name, name);
-                SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, name, list_name,
-                        (uint32_t)strlen(list_name));
+                /* to_server */
+                for (uint8_t state = 0; state <= max_state; state++) {
+                    const char *state_name =
+                            AppLayerParserGetSubStateProgressName(a, s, state, STREAM_TOSERVER);
+                    BUG_ON(state_name == NULL);
 
-                DetectAppLayerInspectEngineRegister(
-                        list_name, a, SIG_FLAG_TOSERVER, p, DetectEngineInspectGenericList, NULL);
+                    if (state_name != NULL && !IsBuiltIn(state_name)) {
+                        char list_name[64];
+                        snprintf(list_name, sizeof(list_name), "%s:%s:%s:generic", alproto_name,
+                                sub_state_name, state_name);
+                        DetectAppLayerInspectEngineRegisterSubState(list_name, a, SIG_FLAG_TOSERVER,
+                                s, state, DetectEngineInspectGenericList, NULL);
+                    }
+                }
+                /* to_client */
+                for (uint8_t state = 0; state <= max_state; state++) {
+                    const char *state_name =
+                            AppLayerParserGetSubStateProgressName(a, s, state, STREAM_TOCLIENT);
+                    BUG_ON(state_name == NULL);
+                    if (state_name != NULL && !IsBuiltIn(state_name)) {
+                        char list_name[64];
+                        snprintf(list_name, sizeof(list_name), "%s:%s:%s:generic", alproto_name,
+                                sub_state_name, state_name);
+                        DetectAppLayerInspectEngineRegisterSubState(list_name, a, SIG_FLAG_TOCLIENT,
+                                s, state, DetectEngineInspectGenericList, NULL);
+                    }
+                }
             }
-        }
-        for (int p = 0; p <= max_progress_tc; p++) {
-            const char *name = AppLayerParserGetStateNameById(
-                    IPPROTO_TCP /* TODO no ipproto */, a, p, STREAM_TOCLIENT);
-            if (name != NULL && !IsBuiltIn(name)) {
-                char list_name[64];
-                snprintf(list_name, sizeof(list_name), "%s:%s:generic", alproto_name, name);
-                SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, name, list_name,
-                        (uint32_t)strlen(list_name));
+        } else {
+            const uint8_t max_progress_ts =
+                    AppLayerParserGetStateProgressCompletionStatus(a, STREAM_TOSERVER);
+            const uint8_t max_progress_tc =
+                    AppLayerParserGetStateProgressCompletionStatus(a, STREAM_TOCLIENT);
 
-                DetectAppLayerInspectEngineRegister(
-                        list_name, a, SIG_FLAG_TOCLIENT, p, DetectEngineInspectGenericList, NULL);
+            char ts_tx_started[64];
+            snprintf(ts_tx_started, sizeof(ts_tx_started), "%s:request_started:generic",
+                    alproto_name);
+            DetectAppLayerInspectEngineRegister(
+                    ts_tx_started, a, SIG_FLAG_TOSERVER, 0, DetectEngineInspectGenericList, NULL);
+            SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "request_name", ts_tx_started,
+                    (uint32_t)strlen(ts_tx_started));
+
+            char tc_tx_started[64];
+            snprintf(tc_tx_started, sizeof(tc_tx_started), "%s:response_started:generic",
+                    alproto_name);
+            DetectAppLayerInspectEngineRegister(
+                    tc_tx_started, a, SIG_FLAG_TOCLIENT, 0, DetectEngineInspectGenericList, NULL);
+            SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "response_name", tc_tx_started,
+                    (uint32_t)strlen(tc_tx_started));
+
+            char ts_tx_complete[64];
+            snprintf(ts_tx_complete, sizeof(ts_tx_complete), "%s:request_complete:generic",
+                    alproto_name);
+            DetectAppLayerInspectEngineRegister(ts_tx_complete, a, SIG_FLAG_TOSERVER,
+                    max_progress_ts, DetectEngineInspectGenericList, NULL);
+            SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "request_name", ts_tx_complete,
+                    (uint32_t)strlen(ts_tx_complete));
+
+            char tc_tx_complete[64];
+            snprintf(tc_tx_complete, sizeof(tc_tx_complete), "%s:response_complete:generic",
+                    alproto_name);
+            DetectAppLayerInspectEngineRegister(tc_tx_complete, a, SIG_FLAG_TOCLIENT,
+                    max_progress_tc, DetectEngineInspectGenericList, NULL);
+            SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, "response_name", tc_tx_complete,
+                    (uint32_t)strlen(tc_tx_complete));
+
+            for (uint8_t p = 0; p <= max_progress_ts; p++) {
+                const char *name = AppLayerParserGetStateNameById(
+                        IPPROTO_TCP /* TODO no ipproto */, a, p, STREAM_TOSERVER);
+                if (name != NULL && !IsBuiltIn(name)) {
+                    char list_name[64];
+                    snprintf(list_name, sizeof(list_name), "%s:%s:generic", alproto_name, name);
+                    SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, name, list_name,
+                            (uint32_t)strlen(list_name));
+
+                    DetectAppLayerInspectEngineRegister(list_name, a, SIG_FLAG_TOSERVER, p,
+                            DetectEngineInspectGenericList, NULL);
+                }
+            }
+            for (uint8_t p = 0; p <= max_progress_tc; p++) {
+                const char *name = AppLayerParserGetStateNameById(
+                        IPPROTO_TCP /* TODO no ipproto */, a, p, STREAM_TOCLIENT);
+                if (name != NULL && !IsBuiltIn(name)) {
+                    char list_name[64];
+                    snprintf(list_name, sizeof(list_name), "%s:%s:generic", alproto_name, name);
+                    SCLogDebug("- hook %s:%s list %s (%u)", alproto_name, name, list_name,
+                            (uint32_t)strlen(list_name));
+
+                    DetectAppLayerInspectEngineRegister(list_name, a, SIG_FLAG_TOCLIENT, p,
+                            DetectEngineInspectGenericList, NULL);
+                }
             }
         }
     }
@@ -1299,11 +1368,12 @@ static int SigParseProtoHookPkt(Signature *s, const char *proto_hook, const char
     return 0;
 }
 
-static SignatureHook SetAppHook(const AppProto alproto, int progress)
+static SignatureHook SetAppHook(const AppProto alproto, uint8_t sub_state, uint8_t progress)
 {
     SignatureHook h = {
         .type = SIGNATURE_HOOK_TYPE_APP,
         .t.app.alproto = alproto,
+        .t.app.sub_state = sub_state,
         .t.app.app_progress = progress,
     };
     return h;
@@ -1312,43 +1382,140 @@ static SignatureHook SetAppHook(const AppProto alproto, int progress)
 /**
  * \param proto_hook string of protocol and hook, e.g. dns:request_complete
  */
-static int SigParseProtoHookApp(Signature *s, const char *proto_hook, const char *p, const char *h)
+static int SigParseProtoHookApp(
+        Signature *s, const char *proto_hook, const char *p, const char *in_h)
 {
-    if (strcmp(h, "request_started") == 0) {
-        s->flags |= SIG_FLAG_TOSERVER;
-        s->init_data->hook =
-                SetAppHook(s->alproto, 0); // state 0 should be the starting state in each protocol.
-    } else if (strcmp(h, "response_started") == 0) {
-        s->flags |= SIG_FLAG_TOCLIENT;
-        s->init_data->hook =
-                SetAppHook(s->alproto, 0); // state 0 should be the starting state in each protocol.
-    } else if (strcmp(h, "request_complete") == 0) {
-        s->flags |= SIG_FLAG_TOSERVER;
-        s->init_data->hook = SetAppHook(s->alproto,
-                AppLayerParserGetStateProgressCompletionStatus(s->alproto, STREAM_TOSERVER));
-    } else if (strcmp(h, "response_complete") == 0) {
-        s->flags |= SIG_FLAG_TOCLIENT;
-        s->init_data->hook = SetAppHook(s->alproto,
-                AppLayerParserGetStateProgressCompletionStatus(s->alproto, STREAM_TOCLIENT));
-    } else {
-        const int progress_ts = AppLayerParserGetStateIdByName(
-                IPPROTO_TCP /* TODO */, s->alproto, h, STREAM_TOSERVER);
-        if (progress_ts >= 0) {
-            s->flags |= SIG_FLAG_TOSERVER;
-            s->init_data->hook = SetAppHook(s->alproto, progress_ts);
-        } else {
-            const int progress_tc = AppLayerParserGetStateIdByName(
-                    IPPROTO_TCP /* TODO */, s->alproto, h, STREAM_TOCLIENT);
-            if (progress_tc < 0) {
-                return -1;
-            }
-            s->flags |= SIG_FLAG_TOCLIENT;
-            s->init_data->hook = SetAppHook(s->alproto, progress_tc);
-        }
+    char hook[64];
+    char generic_hook_name[256];
+    strlcpy(hook, in_h, sizeof(hook));
+    const char *h = hook;
+    const char *t = NULL;
+    uint8_t sub_state = 0;
+
+    bool has_type = strchr(hook, ':') != NULL;
+    if (has_type) {
+        char *rem = NULL;
+        t = strtok_r(hook, ":", &rem);
+        h = rem;
+        SCLogDebug("h: '%s' t: '%s'", h, t);
+    }
+    if (h == NULL || strlen(h) == 0) {
+        SCLogError("invalid hook specification '%s'", hook);
+        return -1;
     }
 
-    char generic_hook_name[64];
-    snprintf(generic_hook_name, sizeof(generic_hook_name), "%s:generic", proto_hook);
+    if (t != NULL) {
+        if (strlen(t) == 0) {
+            SCLogError("invalid tx type specification '%s'", hook);
+            return -1;
+        }
+        if (strcmp(p, "http2") == 0 || strcmp(p, "doh2") == 0) {
+            if (strcmp(t, "stream") == 0) {
+                sub_state = HTTP2TxTypeStream;
+            } else if (strcmp(t, "global") == 0) {
+                sub_state = HTTP2TxTypeGlobal;
+            } else {
+                SCLogError("unknown %s tx type specification '%s': valid values are 'stream' "
+                           "and 'global'",
+                        p, hook);
+                return -1;
+            }
+        } else {
+            SCLogError("sub states currently only supported for http2 and doh2");
+            return -1;
+        }
+        /* FW hook LTE mode */
+        if (*h == '<') {
+            h++;
+            SCLogDebug("hook and prior hooks: '%s'", h);
+            s->flags |= SIG_FLAG_FW_HOOK_LTE;
+        }
+        const uint8_t max_state = AppLayerParserGetSubStateCompletion(
+                s->alproto, sub_state); // TODO allow different completion per direction?
+        if (strcmp(h, "request_started") == 0) {
+            s->flags |= SIG_FLAG_TOSERVER;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state,
+                    0); // state 0 should be the starting state in each protocol.
+        } else if (strcmp(h, "response_started") == 0) {
+            s->flags |= SIG_FLAG_TOCLIENT;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state,
+                    0); // state 0 should be the starting state in each protocol.
+        } else if (strcmp(h, "request_complete") == 0) {
+            s->flags |= SIG_FLAG_TOSERVER;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state, max_state);
+        } else if (strcmp(h, "response_complete") == 0) {
+            s->flags |= SIG_FLAG_TOCLIENT;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state, max_state);
+        } else {
+            const int8_t progress_ts =
+                    AppLayerParserGetSubStateProgressId(s->alproto, sub_state, h, STREAM_TOSERVER);
+            if (progress_ts >= 0) {
+                s->flags |= SIG_FLAG_TOSERVER;
+                s->init_data->hook = SetAppHook(s->alproto, sub_state, progress_ts);
+            } else {
+                const int8_t progress_tc = AppLayerParserGetSubStateProgressId(
+                        s->alproto, sub_state, h, STREAM_TOCLIENT);
+                if (progress_tc < 0) {
+                    return -1;
+                }
+                s->flags |= SIG_FLAG_TOCLIENT;
+                s->init_data->hook = SetAppHook(s->alproto, sub_state, progress_tc);
+            }
+        }
+        snprintf(generic_hook_name, sizeof(generic_hook_name), "%s:%s:%s:generic", p, t, h);
+    } else {
+        if (AppLayerParserSupportsSubStates(s->alproto)) {
+            SCLogError(
+                    "protocol %s requires a substate specification: %s:<sub_state>:%s", p, p, hook);
+            return -1;
+        }
+
+        /* FW hook LTE mode */
+        if (*h == '<') {
+            h++;
+            SCLogDebug("hook and prior hooks: '%s'", h);
+            s->flags |= SIG_FLAG_FW_HOOK_LTE;
+        }
+        SCLogDebug("h:'%s'", h);
+        if (strcmp(h, "request_started") == 0) {
+            s->flags |= SIG_FLAG_TOSERVER;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state,
+                    0); // state 0 should be the starting state in each protocol.
+        } else if (strcmp(h, "response_started") == 0) {
+            s->flags |= SIG_FLAG_TOCLIENT;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state,
+                    0); // state 0 should be the starting state in each protocol.
+        } else if (strcmp(h, "request_complete") == 0) {
+            s->flags |= SIG_FLAG_TOSERVER;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state,
+                    AppLayerParserGetStateProgressCompletionStatus(s->alproto, STREAM_TOSERVER));
+        } else if (strcmp(h, "response_complete") == 0) {
+            s->flags |= SIG_FLAG_TOCLIENT;
+            s->init_data->hook = SetAppHook(s->alproto, sub_state,
+                    AppLayerParserGetStateProgressCompletionStatus(s->alproto, STREAM_TOCLIENT));
+        } else {
+            const int progress_ts = AppLayerParserGetStateIdByName(
+                    IPPROTO_TCP /* TODO */, s->alproto, h, STREAM_TOSERVER);
+            if (progress_ts >= 0) {
+                if (progress_ts >= APP_LAYER_MAX_PROGRESS) {
+                    return -1;
+                }
+                s->flags |= SIG_FLAG_TOSERVER;
+                s->init_data->hook = SetAppHook(s->alproto, sub_state, (uint8_t)progress_ts);
+            } else {
+                const int progress_tc = AppLayerParserGetStateIdByName(
+                        IPPROTO_TCP /* TODO */, s->alproto, h, STREAM_TOCLIENT);
+                if (progress_tc < 0 || progress_tc >= APP_LAYER_MAX_PROGRESS) {
+                    return -1;
+                }
+                s->flags |= SIG_FLAG_TOCLIENT;
+                s->init_data->hook = SetAppHook(s->alproto, sub_state, (uint8_t)progress_tc);
+            }
+        }
+        snprintf(generic_hook_name, sizeof(generic_hook_name), "%s:%s:generic", p, h);
+    }
+    SCLogDebug("generic_hook_name %s", generic_hook_name);
+
     int list = DetectBufferTypeGetByName(generic_hook_name);
     if (list < 0) {
         SCLogError("no list registered as %s for hook %s", generic_hook_name, proto_hook);
@@ -1360,7 +1527,7 @@ static int SigParseProtoHookApp(Signature *s, const char *proto_hook, const char
             SignatureHookTypeToString(s->init_data->hook.type), s->init_data->hook.t.app.alproto,
             s->init_data->hook.t.app.app_progress);
 
-    s->app_progress_hook = (uint8_t)s->init_data->hook.t.app.app_progress;
+    s->app_progress_hook = s->init_data->hook.t.app.app_progress;
     return 0;
 }
 
@@ -1386,36 +1553,40 @@ void DetectListSupportedProtocols(void)
 static int SigParseProto(Signature *s, const char *protostr)
 {
     SCEnter();
-    if (strlen(protostr) > 32)
+    if (strlen(protostr) >= 64)
         return -1;
 
-    char proto[33];
-    strlcpy(proto, protostr, 33);
+    char proto[64];
+    strlcpy(proto, protostr, sizeof(proto));
     const char *p = proto;
     const char *h = NULL;
 
     bool has_hook = strchr(proto, ':') != NULL;
     if (has_hook) {
-        char *xsaveptr = NULL;
-        p = strtok_r(proto, ":", &xsaveptr);
-        h = strtok_r(NULL, ":", &xsaveptr);
+        char *rem = NULL;
+        p = strtok_r(proto, ":", &rem);
+        h = rem;
         SCLogDebug("p: '%s' h: '%s'", p, h);
     }
-    if (p == NULL) {
+    if (p == NULL || strlen(p) == 0) {
         SCLogError("invalid protocol specification '%s'", proto);
         return -1;
     }
 
-    int r = DetectProtoParse(&s->proto, p);
+    int r = DetectProtoParse(&s->init_data->proto, (char *)p);
     if (r < 0) {
         s->alproto = AppLayerGetProtoByName(p);
         /* indicate that the signature is app-layer */
         if (s->alproto != ALPROTO_UNKNOWN) {
             s->flags |= SIG_FLAG_APPLAYER;
 
-            AppLayerProtoDetectSupportedIpprotos(s->alproto, s->proto.proto);
+            AppLayerProtoDetectSupportedIpprotos(s->alproto, s->init_data->proto.proto);
 
             if (h) {
+                if (strlen(h) == 0) {
+                    SCLogError("invalid protocol specification '%s'", proto);
+                    return -1;
+                }
                 if (SigParseProtoHookApp(s, protostr, p, h) < 0) {
                     SCLogError("protocol \"%s\" does not support hook \"%s\"", p, h);
                     SCReturnInt(-1);
@@ -1442,9 +1613,9 @@ static int SigParseProto(Signature *s, const char *protostr)
 
     /* if any of these flags are set they are set in a mutually exclusive
      * manner */
-    if (s->proto.flags & DETECT_PROTO_ONLY_PKT) {
+    if (s->init_data->proto.flags & DETECT_PROTO_ONLY_PKT) {
         s->flags |= SIG_FLAG_REQUIRE_PACKET;
-    } else if (s->proto.flags & DETECT_PROTO_ONLY_STREAM) {
+    } else if (s->init_data->proto.flags & DETECT_PROTO_ONLY_STREAM) {
         s->flags |= SIG_FLAG_REQUIRE_STREAM;
     }
 
@@ -1553,13 +1724,14 @@ static uint8_t ActionStringToFlags(const char *action)
  *        to its Signature instance.
  *
  * \param s      Pointer to the Signature instance to which the action belongs.
- * \param action Pointer to the action string used by the Signature.
+ * \param action_in Pointer to the action string used by the Signature.
  *
  * \retval  0 On successfully parsing the action string and adding it to the
  *            Signature.
  * \retval -1 On failure.
  */
-static int SigParseAction(Signature *s, const char *action_in)
+static int SigParseActionDo(const char *action_in, const int idx, const bool fw_rule,
+        uint8_t *action_out, uint8_t *scope_out)
 {
     char action[32];
     strlcpy(action, action_in, sizeof(action));
@@ -1582,6 +1754,29 @@ static int SigParseAction(Signature *s, const char *action_in)
     if (flags == 0)
         return -1;
 
+    if (fw_rule) {
+        /* in firewall mode, drop is just drop. Whereas in IDS/IPS mode, drop is drop+alert.
+         * Same for reject which includes ACTION_DROP. */
+        if (flags & ACTION_DROP) {
+            flags &= ~ACTION_ALERT;
+        }
+
+        if (idx == 0 &&
+                !(flags & (ACTION_ACCEPT | ACTION_DROP | ACTION_REJECT_ANY | ACTION_CONFIG))) {
+            SCLogError("only accept, config, drop and reject actions allowed as primary action "
+                       "firewall "
+                       "rules");
+            return -1;
+        }
+        if (idx > 0 &&
+                (flags & (ACTION_ACCEPT | ACTION_DROP | ACTION_REJECT_ANY | ACTION_CONFIG))) {
+            SCLogError("accept, config, drop and reject actions not allowed as secondary action "
+                       "firewall "
+                       "rules");
+            return -1;
+        }
+    }
+
     /* parse scope, if any */
     if (o) {
         uint8_t scope_flags = 0;
@@ -1596,7 +1791,6 @@ static int SigParseAction(Signature *s, const char *action_in)
                         o, action_in);
                 return -1;
             }
-            s->action_scope = scope_flags;
         } else if (flags & (ACTION_ACCEPT)) {
             if (strcmp(o, "packet") == 0) {
                 scope_flags = (uint8_t)ACTION_SCOPE_PACKET;
@@ -1613,7 +1807,6 @@ static int SigParseAction(Signature *s, const char *action_in)
                         o, action_in);
                 return -1;
             }
-            s->action_scope = scope_flags;
         } else if (flags & (ACTION_CONFIG)) {
             if (strcmp(o, "packet") == 0) {
                 scope_flags = (uint8_t)ACTION_SCOPE_PACKET;
@@ -1622,33 +1815,60 @@ static int SigParseAction(Signature *s, const char *action_in)
                         action_in);
                 return -1;
             }
-            s->action_scope = scope_flags;
         } else {
             SCLogError("invalid action scope '%s' in action '%s': scope only supported for actions "
                        "'drop', 'pass' and 'reject'",
                     o, action_in);
             return -1;
         }
+        if (*scope_out != 0 && *scope_out != scope_flags) {
+            SCLogError("multi-action rules cannot use different action scopes");
+            return -1;
+        }
+        *scope_out = scope_flags;
     }
 
     /* require explicit action scope for fw rules */
-    if (s->init_data->firewall_rule && s->action_scope == 0) {
+    if (fw_rule && *scope_out == 0) {
         SCLogError("firewall rules require setting an explicit action scope");
         return -1;
     }
 
-    if (!s->init_data->firewall_rule && (flags & ACTION_ACCEPT)) {
+    if (!fw_rule && (flags & ACTION_ACCEPT)) {
         SCLogError("'accept' action only supported for firewall rules");
         return -1;
     }
+    *action_out |= flags;
+    return 0;
+}
 
-    if (s->init_data->firewall_rule && (flags & ACTION_PASS)) {
-        SCLogError("'pass' action not supported for firewall rules");
-        return -1;
+static int SigParseAction(Signature *s, const char *action_in)
+{
+    /* multi-action rules are only supported for firewall rules at this time. */
+    if (!s->init_data->firewall_rule)
+        return SigParseActionDo(action_in, 0, false, &s->action, &s->action_scope);
+
+    int r = 0;
+    char *copy = SCStrdup(action_in);
+    if (copy == NULL)
+        FatalError("could not duplicate opt string");
+
+    int i = 0;
+    char *xsaveptr = NULL;
+    char *a = strtok_r(copy, ",", &xsaveptr);
+    while (a != NULL) {
+        if (SigParseActionDo(a, i, true, &s->action, &s->action_scope) < 0) {
+            r = -1;
+            break;
+        }
+        a = strtok_r(NULL, ",", &xsaveptr);
+        i++;
     }
 
-    s->action = flags;
-    return 0;
+    SCFree(copy);
+
+    SCLogDebug("s->action %02x", s->action);
+    return r;
 }
 
 /**
@@ -1889,6 +2109,7 @@ static int SigParse(DetectEngineCtx *de_ctx, Signature *s, const char *sigstr,
     /* we can have no options, so make sure we have them */
     if (strlen(parser->opts) > 0) {
         size_t buffer_size = strlen(parser->opts) + 1;
+        DEBUG_VALIDATE_BUG_ON(buffer_size > DETECT_MAX_RULE_SIZE);
         char input[buffer_size];
         char output[buffer_size];
         memset(input, 0x00, buffer_size);
@@ -2115,6 +2336,9 @@ void SigFree(DetectEngineCtx *de_ctx, Signature *s)
     }
     if (s->dp != NULL) {
         DetectPortCleanupList(NULL, s->dp);
+    }
+    if (s->proto) {
+        SCFree(s->proto);
     }
 
     if (s->msg != NULL)
@@ -2399,6 +2623,11 @@ static void SigSetupPrefilter(DetectEngineCtx *de_ctx, Signature *s)
     SCLogDebug("s %u: set up prefilter/mpm", s->id);
     DEBUG_VALIDATE_BUG_ON(s->init_data->mpm_sm != NULL);
 
+    if (s->flags & SIG_FLAG_FW_HOOK_LTE) {
+        SCLogDebug("no prefilter for SIG_FLAG_FW_HOOK_LTE sig");
+        SCReturn;
+    }
+
     if (s->init_data->prefilter_sm != NULL) {
         if (s->init_data->prefilter_sm->type == DETECT_CONTENT) {
             RetrieveFPForSig(de_ctx, s);
@@ -2490,6 +2719,36 @@ static bool DetectFirewallRuleValidate(const DetectEngineCtx *de_ctx, const Sign
                 s->id);
         return false;
     }
+    if (s->init_data->hook.type == SIGNATURE_HOOK_TYPE_APP) {
+        switch (s->action_scope) {
+            case ACTION_SCOPE_PACKET:
+                if (!(DetectProtoContainsProto(&s->init_data->proto, IPPROTO_UDP))) {
+                    if (s->action & (ACTION_ACCEPT | ACTION_DROP)) {
+                        SCLogError("rule %u uses action scope \"packet\" for an non-UDP app hook",
+                                s->id);
+                        return false;
+                    }
+                }
+                break;
+            case ACTION_SCOPE_FLOW:
+            case ACTION_SCOPE_AUTO:
+            case ACTION_SCOPE_TX:
+            case ACTION_SCOPE_HOOK:
+                // supported for app hooks
+                break;
+        }
+    }
+    if (s->flags & SIG_FLAG_FW_HOOK_LTE) {
+        if (!(((s->action & ACTION_ACCEPT) != 0) &&
+                    (s->action_scope == ACTION_SCOPE_FLOW || s->action_scope == ACTION_SCOPE_TX ||
+                            s->action_scope == ACTION_SCOPE_HOOK))) {
+            SCLogError("rule %u: auto-accept notation (<hook) can only be used with accept:flow, "
+                       "accept:tx and accept:hook",
+                    s->id);
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -2597,44 +2856,84 @@ static int SigValidateCheckBuffers(
             SCReturnInt(0);
         }
 
+        uint32_t app_buffers_evaluated = 0;
+        bool buffer_consumed = false;
+        uint32_t buffer_skip_alproto = 0;
+        uint32_t buffer_skip_substate = 0;
         const DetectEngineAppInspectionEngine *app = de_ctx->app_inspect_engines;
         for (; app != NULL; app = app->next) {
-            if (app->sm_list == b->id &&
-                    (AppProtoEquals(s->alproto, app->alproto) || s->alproto == 0)) {
-                SCLogDebug("engine %s dir %d alproto %d",
-                        DetectEngineBufferTypeGetNameById(de_ctx, app->sm_list), app->dir,
-                        app->alproto);
-                SCLogDebug("b->id %d nlists %d", b->id, nlists);
+            if (app->sm_list != b->id)
+                continue;
+            app_buffers_evaluated++;
 
-                if (b->only_tc) {
-                    if (app->dir == 1)
-                        (*tc_excl)++;
-                } else if (b->only_ts) {
-                    if (app->dir == 0)
-                        (*ts_excl)++;
-                } else {
-                    bufdir[b->id].ts += (app->dir == 0);
-                    bufdir[b->id].tc += (app->dir == 1);
-                }
-
+            if (s->init_data->hook.type == SIGNATURE_HOOK_TYPE_APP) {
                 /* only allow rules to use the hook for engines at that
-                 * exact progress for now. */
-                if (s->init_data->hook.type == SIGNATURE_HOOK_TYPE_APP) {
-                    if ((s->flags & SIG_FLAG_TOSERVER) && (app->dir == 0) &&
-                            app->progress != s->init_data->hook.t.app.app_progress) {
-                        SCLogError("engine progress value %d doesn't match hook %u", app->progress,
-                                s->init_data->hook.t.app.app_progress);
-                        SCReturnInt(0);
-                    }
-                    if ((s->flags & SIG_FLAG_TOCLIENT) && (app->dir == 1) &&
-                            app->progress != s->init_data->hook.t.app.app_progress) {
-                        SCLogError("engine progress value doesn't match hook");
-                        SCReturnInt(0);
-                    }
+                 * exact progress for now. We make an exception for generic
+                 * engines like app-layer-event. */
+                if (!(AppProtoEqualsStrict(s->alproto, app->alproto) ||
+                            app->alproto == ALPROTO_UNKNOWN)) {
+                    SCLogDebug("%u:%s: for buffer %s skip engine %s alproto %s", s->id,
+                            AppProtoToString(s->alproto), bt->name,
+                            DetectEngineBufferTypeGetNameById(de_ctx, app->sm_list),
+                            AppProtoToString(app->alproto));
+                    buffer_skip_alproto++;
+                    continue;
+                }
+                if (app->alproto != ALPROTO_UNKNOWN &&
+                        app->sub_state != s->init_data->hook.t.app.sub_state) {
+                    buffer_skip_substate++;
+                    continue;
+                }
+            } else {
+                if (!(AppProtoEquals(s->alproto, app->alproto) || s->alproto == ALPROTO_UNKNOWN ||
+                            app->alproto == ALPROTO_UNKNOWN)) {
+                    SCLogDebug("%u:%s: for buffer %s skip engine %s alproto %s", s->id,
+                            AppProtoToString(s->alproto), bt->name,
+                            DetectEngineBufferTypeGetNameById(de_ctx, app->sm_list),
+                            AppProtoToString(app->alproto));
+                    buffer_skip_alproto++;
+                    continue;
                 }
             }
-        }
 
+            SCLogDebug("engine %s dir %d alproto %d",
+                    DetectEngineBufferTypeGetNameById(de_ctx, app->sm_list), app->dir,
+                    app->alproto);
+            SCLogDebug("b->id %d nlists %d", b->id, nlists);
+
+            if (b->only_tc) {
+                if (app->dir == 1)
+                    (*tc_excl)++;
+            } else if (b->only_ts) {
+                if (app->dir == 0)
+                    (*ts_excl)++;
+            } else {
+                bufdir[b->id].ts += (app->dir == 0);
+                bufdir[b->id].tc += (app->dir == 1);
+            }
+
+            if (s->init_data->hook.type == SIGNATURE_HOOK_TYPE_APP) {
+                if ((s->flags & SIG_FLAG_TOSERVER) && (app->dir == 0) &&
+                        app->progress != s->init_data->hook.t.app.app_progress) {
+                    SCLogError("engine progress value %d doesn't match hook %u", app->progress,
+                            s->init_data->hook.t.app.app_progress);
+                    SCReturnInt(0);
+                }
+                if ((s->flags & SIG_FLAG_TOCLIENT) && (app->dir == 1) &&
+                        app->progress != s->init_data->hook.t.app.app_progress) {
+                    SCLogError("engine progress value doesn't match hook");
+                    SCReturnInt(0);
+                }
+            }
+
+            buffer_consumed = true;
+        }
+        if (app_buffers_evaluated && !buffer_consumed) {
+            SCLogError("incompatible rule conditions, skipped buffer %s, reasons: app proto %u sub "
+                       "state %u",
+                    bt->name, buffer_skip_alproto, buffer_skip_substate);
+            SCReturnInt(0);
+        }
         if (!DetectEngineBufferRunValidateCallback(de_ctx, b->id, s, &de_ctx->sigerror)) {
             SCReturnInt(0);
         }
@@ -2728,7 +3027,7 @@ static void SigConsolidateTcpBuffer(Signature *s)
      * - pkt vs stream vs depth/offset
      * - pkt vs stream vs stream_size
      */
-    if (s->proto.proto[IPPROTO_TCP / 8] & (1 << (IPPROTO_TCP % 8))) {
+    if (DetectProtoContainsProto(&s->init_data->proto, IPPROTO_TCP)) {
         if (s->init_data->smlists[DETECT_SM_LIST_PMATCH]) {
             if (!(s->flags & (SIG_FLAG_REQUIRE_PACKET | SIG_FLAG_REQUIRE_STREAM))) {
                 s->flags |= SIG_FLAG_REQUIRE_STREAM;
@@ -2802,6 +3101,41 @@ static int SigValidateFileHandling(const Signature *s)
     SCReturnInt(1);
 }
 
+static bool SigValidateEthernet(const Signature *s)
+{
+    if (s->init_data->proto.flags & (DETECT_PROTO_ETHERNET | DETECT_PROTO_ARP)) {
+        if ((s->flags & (SIG_FLAG_SP_ANY | SIG_FLAG_DP_ANY)) !=
+                (SIG_FLAG_SP_ANY | SIG_FLAG_DP_ANY)) {
+            SCLogError("can't use ports with ether or arp rule");
+            return false;
+        }
+    }
+    return true;
+}
+
+/* `pkthdr` is meant to allow matching on "any" packet with a decoder event. */
+static bool SigValidateProtoPkthdr(const Signature *s)
+{
+    if ((s->init_data->proto.flags & DETECT_PROTO_L2_ANY) && s->type != SIG_TYPE_DEONLY) {
+        SCLogError("protocol 'pkthdr' is for decoder-events only");
+        return false;
+    }
+    return true;
+}
+
+static bool SigValidateFlowbitUse(DetectEngineCtx *de_ctx, const Signature *s)
+{
+    DEBUG_VALIDATE_BUG_ON(de_ctx->max_flowbits == 0);
+
+    if (s->init_data->total_flowbits > de_ctx->max_flowbits) {
+        SCLogError(
+                "rule %u: too many flowbits (max %u per signature)", s->id, de_ctx->max_flowbits);
+        return false;
+    }
+
+    return true;
+}
+
 /**
  *  \internal
  *  \brief validate and consolidate parsed signature
@@ -2824,6 +3158,10 @@ static int SigValidateConsolidate(
         SCReturnInt(0);
     }
 
+    if (!SigValidateEthernet(s)) {
+        SCReturnInt(0);
+    }
+
     int ts_excl = 0;
     int tc_excl = 0;
     int dir_amb = 0;
@@ -2840,6 +3178,17 @@ static int SigValidateConsolidate(
 
     SignatureSetType(de_ctx, s);
     DetectRuleSetTable(s);
+
+    if (!SigValidateProtoPkthdr(s)) {
+        SCReturnInt(0);
+    }
+
+    if (!SigValidateFlowbitUse(de_ctx, s)) {
+        SCReturnInt(0);
+    }
+
+    if (DetectProtoFinalizeSignature(s) != 0)
+        SCReturnInt(0);
 
     int r = SigValidateFileHandling(s);
     if (r == 0) {
@@ -2935,15 +3284,15 @@ static Signature *SigInitHelper(
 
     if (sig->alproto != ALPROTO_UNKNOWN) {
         int override_needed = 0;
-        if (sig->proto.flags & DETECT_PROTO_ANY) {
-            sig->proto.flags &= ~DETECT_PROTO_ANY;
-            memset(sig->proto.proto, 0x00, sizeof(sig->proto.proto));
+        if (sig->init_data->proto.flags & DETECT_PROTO_ANY) {
+            sig->init_data->proto.flags &= ~DETECT_PROTO_ANY;
+            memset(sig->init_data->proto.proto, 0x00, sizeof(sig->init_data->proto.proto));
             override_needed = 1;
         } else {
             override_needed = 1;
             size_t s = 0;
-            for (s = 0; s < sizeof(sig->proto.proto); s++) {
-                if (sig->proto.proto[s] != 0x00) {
+            for (s = 0; s < sizeof(sig->init_data->proto.proto); s++) {
+                if (sig->init_data->proto.proto[s] != 0x00) {
                     override_needed = 0;
                     break;
                 }
@@ -2954,7 +3303,7 @@ static Signature *SigInitHelper(
          * overridden, we use the ip proto that has been configured
          * against the app proto in use. */
         if (override_needed)
-            AppLayerProtoDetectSupportedIpprotos(sig->alproto, sig->proto.proto);
+            AppLayerProtoDetectSupportedIpprotos(sig->alproto, sig->init_data->proto.proto);
     }
 
     /* set the packet and app layer flags, but only if the
@@ -3256,7 +3605,9 @@ static inline int DetectEngineSignatureIsDuplicate(DetectEngineCtx *de_ctx,
             sw_tmp.s = de_ctx->sig_list;
             sw_old = HashListTableLookup(de_ctx->dup_sig_hash_table,
                                          (void *)&sw_tmp, 0);
-            /* sw_old == NULL case is impossible */
+            /* sw_old == NULL case is impossible: every sig in sig_list
+             * must have a corresponding dup_sig_hash_table entry */
+            DEBUG_VALIDATE_BUG_ON(sw_old == NULL);
             sw_old->s_prev = sig;
         }
 
@@ -3291,6 +3642,7 @@ static inline int DetectEngineSignatureIsDuplicate(DetectEngineCtx *de_ctx,
         if (sw_temp.s != NULL) {
             sw_next = HashListTableLookup(de_ctx->dup_sig_hash_table,
                                           (void *)&sw_temp, 0);
+            DEBUG_VALIDATE_BUG_ON(sw_next == NULL);
             sw_next->s_prev = sw_dup->s_prev;
         }
         SigFree(de_ctx, sw_dup->s);
@@ -3321,6 +3673,7 @@ static inline int DetectEngineSignatureIsDuplicate(DetectEngineCtx *de_ctx,
         if (sw_temp.s != NULL) {
             sw_next = HashListTableLookup(de_ctx->dup_sig_hash_table,
                                           (void *)&sw_temp, 0);
+            DEBUG_VALIDATE_BUG_ON(sw_next == NULL);
             sw_next->s_prev = sw_dup->s_prev;
         }
         SigFree(de_ctx, sw_dup->s);
@@ -3336,6 +3689,7 @@ static inline int DetectEngineSignatureIsDuplicate(DetectEngineCtx *de_ctx,
         sw_tmp.s = de_ctx->sig_list;
         SigDuplWrapper *sw_old = HashListTableLookup(de_ctx->dup_sig_hash_table,
                                                      (void *)&sw_tmp, 0);
+        DEBUG_VALIDATE_BUG_ON(sw_old == NULL);
         if (sw_old->s != sw_dup->s) {
             // Link on top of the list if there was another element
             sw_old->s_prev = sig;
@@ -3628,6 +3982,473 @@ void DetectSetupParseRegexes(const char *parse_str, DetectParseRegex *detect_par
     if (!DetectSetupParseRegexesOpts(parse_str, detect_parse, 0)) {
         FatalError("pcre compile and study failed");
     }
+}
+
+static uint32_t AppPolicyHashFunc(HashTable *ht, void *data, uint16_t datalen)
+{
+    const struct DetectFirewallAppPolicy *p = data;
+    /* use a prime-mix hash */
+    uint32_t hash = p->alproto * 65537 + p->sub_state * 257 + p->progress * 5 +
+                    (p->direction == STREAM_TOSERVER);
+    hash ^= (hash >> 10) ^ (hash >> 20);
+    return hash % ht->array_size;
+}
+
+static char AppPolicyCompareFunc(void *data1, uint16_t datalen1, void *data2, uint16_t datalen2)
+{
+    const struct DetectFirewallAppPolicy *p1 = data1;
+    const struct DetectFirewallAppPolicy *p2 = data2;
+
+    if (p1 == NULL || p2 == NULL)
+        return 0;
+
+    return p1->direction == p2->direction && p1->alproto == p2->alproto &&
+           p1->sub_state == p2->sub_state && p1->progress == p2->progress;
+}
+
+static void AppPolicyHashFree(void *data)
+{
+    struct DetectFirewallAppPolicy *p = data;
+    Signature *s = p->alert_signature;
+    if (s != NULL) {
+        SCFree(s->msg);
+        SCFree(s);
+    }
+    SCFree(p);
+}
+
+const char *ActionScopeToString(enum ActionScope s)
+{
+    switch (s) {
+        case ACTION_SCOPE_PACKET:
+            return "packet";
+        case ACTION_SCOPE_FLOW:
+            return "flow";
+        case ACTION_SCOPE_HOOK:
+            return "hook";
+        case ACTION_SCOPE_TX:
+            return "tx";
+        case ACTION_SCOPE_AUTO:
+            return "auto";
+    }
+    DEBUG_VALIDATE_BUG_ON(1);
+    return "unknown";
+}
+
+void DetectFirewallPolicyToString(const struct DetectFirewallPolicy *p, char *out, size_t out_size)
+{
+    const char *as = ActionScopeToString(p->action_scope);
+    DEBUG_VALIDATE_BUG_ON(as == NULL);
+    if (as == NULL)
+        return;
+    if (p->action & ACTION_REJECT_ANY) {
+        if (p->action & ACTION_REJECT_DST) {
+            snprintf(out, out_size, "rejectdst:%s", as);
+        } else if (p->action & ACTION_REJECT_BOTH) {
+            snprintf(out, out_size, "rejectboth:%s", as);
+        } else {
+            snprintf(out, out_size, "rejectsrc:%s", as);
+        }
+    } else if (p->action & ACTION_DROP) {
+        snprintf(out, out_size, "drop:%s", as);
+    } else if (p->action & ACTION_ACCEPT) {
+        snprintf(out, out_size, "accept:%s", as);
+    } else {
+        DEBUG_VALIDATE_BUG_ON(1);
+    }
+    if (p->action & ACTION_PASS) {
+        if (p->action_scope == ACTION_SCOPE_FLOW) {
+            strlcat(out, ",pass:flow", out_size);
+        } else {
+            DEBUG_VALIDATE_BUG_ON(1);
+        }
+    }
+    if (p->action & ACTION_ALERT) {
+        strlcat(out, ",alert", out_size);
+    }
+}
+
+static int AddPktPolicySignature(struct DetectFirewallPolicies *fw_policies,
+        struct DetectFirewallPolicy *pol, enum DetectFirewallPacketPolicies pkt_pol)
+{
+    Signature *s = SCCalloc(1, sizeof(*s)); // SigAlloc does way more than we need
+    if (s == NULL)
+        return -1;
+    char msg[256];
+    switch (pkt_pol) {
+        case DETECT_FIREWALL_POLICY_PACKET_FILTER:
+            s->detect_table = DETECT_TABLE_PACKET_FILTER;
+            break;
+        case DETECT_FIREWALL_POLICY_PRE_FLOW:
+            s->detect_table = DETECT_TABLE_PACKET_PRE_FLOW;
+            break;
+        case DETECT_FIREWALL_POLICY_PRE_STREAM:
+            s->detect_table = DETECT_TABLE_PACKET_PRE_STREAM;
+            break;
+    }
+    snprintf(msg, sizeof(msg), "SURICATA FW default packet policy");
+    s->msg = SCStrdup(msg);
+    if (s->msg == NULL) {
+        SCFree(s);
+        return -1;
+    }
+    s->action = pol->action;
+    s->action_scope = pol->action_scope;
+    s->flags = SIG_FLAG_FIREWALL;
+    s->type = SIG_TYPE_PKT;
+    s->id = 2201000;
+    s->rev = 1;
+    s->gid = 1;
+    s->prio = 3;
+
+    fw_policies->pkt_policy_signatures[pkt_pol] = s;
+    SCLogDebug("added to array");
+    return 0;
+}
+
+static int AddAppPolicySignature(struct DetectFirewallAppPolicy *pol)
+{
+    Signature *s = SCCalloc(1, sizeof(*s)); // SigAlloc does way more than we need
+    if (s == NULL)
+        return -1;
+    char msg[256];
+    snprintf(msg, sizeof(msg), "SURICATA FW default app policy");
+    s->msg = SCStrdup(msg);
+    if (s->msg == NULL) {
+        SCFree(s);
+        return -1;
+    }
+    s->app_progress_hook = pol->progress;
+    s->action = pol->policy.action;
+    s->action_scope = pol->policy.action_scope;
+    s->alproto = pol->alproto;
+    s->flags = (pol->direction == STREAM_TOSERVER) ? SIG_FLAG_TOSERVER : SIG_FLAG_TOCLIENT;
+    s->flags |= SIG_FLAG_FIREWALL;
+    s->type = SIG_TYPE_APP_TX;
+    s->detect_table = DETECT_TABLE_APP_FILTER;
+    s->id = 2201001;
+    s->rev = 1;
+    s->gid = 1;
+    s->prio = 3;
+
+    pol->alert_signature = s;
+    SCLogDebug("added to hash");
+    return 0;
+}
+
+static int DoParsePolicy(const char *policy_name, struct DetectFirewallPolicy *pol)
+{
+    SCConfNode *policy_actions = SCConfGetNode(policy_name);
+    if (policy_actions == NULL) {
+        SCLogDebug("fw: no policy at %s", policy_name);
+        return 0;
+    }
+
+    uint8_t action = 0;
+    uint8_t action_scope = 0;
+    int idx = 0;
+    SCConfNode *paction = NULL;
+    TAILQ_FOREACH (paction, &policy_actions->head, next) {
+        SCLogDebug("fw: %s => %s", policy_name, paction->val);
+        if (SigParseActionDo(paction->val, idx, true, &action, &action_scope) < 0)
+            return -1;
+        idx++;
+    }
+    pol->action = action;
+    pol->action_scope = action_scope;
+    return 1;
+}
+
+static int DoParseAppSubStatePolicy(const char *prefix, const AppProto app_proto,
+        const uint8_t sub_state, const char *sub_state_name, const uint8_t state,
+        const char *hookname, const uint8_t complete_state, const int direction,
+        struct DetectFirewallPolicies *fw_policies)
+{
+    char policy_name[256];
+    BUG_ON(sub_state_name == NULL);
+    BUG_ON(hookname == NULL);
+
+    char *nname = SCStrdup(hookname);
+    if (nname == NULL)
+        return -1;
+    for (int i = 0; nname[i] != '\0'; i++) {
+        if (nname[i] == '_')
+            nname[i] = '-';
+    }
+
+    const char *app_name = AppProtoToStringRaw(app_proto);
+    int r = snprintf(policy_name, sizeof(policy_name), "%s.app.%s.%s.%s", prefix, app_name,
+            sub_state_name, nname);
+    SCLogDebug("policy_name %s", policy_name);
+    SCFree(nname);
+    if (r < 0 || (size_t)r >= sizeof(policy_name)) {
+        FatalError("internal error: failed to assemble firewall policy config string");
+    }
+
+    struct DetectFirewallAppPolicy *app_pol = SCCalloc(1, sizeof(*app_pol));
+    if (app_pol == NULL)
+        return -1;
+
+    app_pol->alproto = app_proto;
+    app_pol->sub_state = sub_state;
+    app_pol->progress = state;
+    app_pol->direction = (uint8_t)direction;
+    /* init to drop:flow by default, will be overwritten by DoParsePolicy if there
+     * is a config for this hook. */
+    app_pol->policy.action = ACTION_DROP;
+    app_pol->policy.action_scope = ACTION_SCOPE_FLOW;
+
+    r = DoParsePolicy(policy_name, &app_pol->policy);
+    if (r < 0) {
+        SCFree(app_pol);
+        return -1;
+    }
+
+    if (HashTableAdd(fw_policies->app_policies, app_pol, 0) != 0) {
+        FatalError("internal error: insert policy into hash table");
+    }
+    /* for policies with an alert action, create a policy sig */
+    if (r == 1 && app_pol->policy.action & ACTION_ALERT) {
+        SCLogDebug("adding policy signature");
+        return AddAppPolicySignature(app_pol);
+    }
+    SCLogDebug("r %d", r);
+    return r;
+}
+
+static int DoParseAppPolicy(const char *prefix, const AppProto app_proto, const char *hookname,
+        const uint8_t state, const uint8_t complete_state, const int direction,
+        struct DetectFirewallPolicies *fw_policies)
+{
+    char policy_name[256];
+    const char *in_name = hookname;
+    if (hookname == NULL) {
+        if (state == 0) {
+            if (direction == STREAM_TOSERVER)
+                hookname = "request-started";
+            else
+                hookname = "response-started";
+        } else if (state == complete_state) {
+            if (direction == STREAM_TOSERVER)
+                hookname = "request-complete";
+            else
+                hookname = "response-complete";
+        }
+        if (hookname == NULL)
+            return 0;
+    }
+    char *nname = SCStrdup(hookname);
+    if (nname == NULL)
+        return -1;
+    for (int i = 0; nname[i] != '\0'; i++) {
+        if (nname[i] == '_')
+            nname[i] = '-';
+    }
+
+    const char *app_name = AppProtoToStringRaw(app_proto);
+    int r = snprintf(policy_name, sizeof(policy_name), "%s.app.%s.%s", prefix, app_name, nname);
+    SCFree(nname);
+    if (r < 0 || (size_t)r >= sizeof(policy_name)) {
+        FatalError("internal error: failed to assemble firewall policy config string");
+    }
+
+    struct DetectFirewallAppPolicy *app_pol = SCCalloc(1, sizeof(*app_pol));
+    if (app_pol == NULL)
+        return -1;
+
+    app_pol->alproto = app_proto;
+    app_pol->sub_state = 0;
+    app_pol->progress = state;
+    app_pol->direction = (uint8_t)direction;
+    /* init to drop:flow by default, will be overwritten by DoParsePolicy if there
+     * is a config for this hook. */
+    app_pol->policy.action = ACTION_DROP;
+    app_pol->policy.action_scope = ACTION_SCOPE_FLOW;
+
+    r = DoParsePolicy(policy_name, &app_pol->policy);
+    if (r == 0 && in_name != NULL) {
+        if (state == 0) {
+            if (direction == STREAM_TOSERVER)
+                hookname = "request-started";
+            else
+                hookname = "response-started";
+        } else if (state == complete_state) {
+            if (direction == STREAM_TOSERVER)
+                hookname = "request-complete";
+            else
+                hookname = "response-complete";
+        }
+        if (hookname == NULL)
+            return 0;
+        r = snprintf(policy_name, sizeof(policy_name), "%s.app.%s.%s", prefix, app_name, hookname);
+        if (r < 0 || (size_t)r >= sizeof(policy_name)) {
+            FatalError("internal error: failed to assemble firewall policy config string");
+        }
+
+        r = DoParsePolicy(policy_name, &app_pol->policy);
+    }
+    if (r < 0) {
+        SCFree(app_pol);
+        return -1;
+    }
+
+    if (HashTableAdd(fw_policies->app_policies, app_pol, 0) != 0) {
+        FatalError("internal error: insert policy into hash table");
+    }
+
+    /* for policies with an alert action, create a policy sig */
+    if (r == 1 && app_pol->policy.action & ACTION_ALERT) {
+        SCLogDebug("adding policy signature");
+        return AddAppPolicySignature(app_pol);
+    }
+
+    return r;
+}
+
+/** \brief allocate and initialize to default values the policies table */
+int DetectFirewallInitDefaultPolicies(DetectEngineCtx *de_ctx)
+{
+    struct DetectFirewallPolicies *fw_policies = SCCalloc(1, sizeof(*fw_policies));
+    if (fw_policies == NULL)
+        return -1;
+    fw_policies->app_policies =
+            HashTableInit(512, AppPolicyHashFunc, AppPolicyCompareFunc, AppPolicyHashFree);
+    if (fw_policies->app_policies == NULL) {
+        SCFree(fw_policies);
+        return -1;
+    }
+
+    fw_policies->pkt[DETECT_FIREWALL_POLICY_PACKET_FILTER].action = ACTION_DROP;
+    fw_policies->pkt[DETECT_FIREWALL_POLICY_PACKET_FILTER].action_scope = ACTION_SCOPE_PACKET;
+
+    fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_FLOW].action = ACTION_ACCEPT;
+    fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_FLOW].action_scope = ACTION_SCOPE_HOOK;
+
+    fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_STREAM].action = ACTION_ACCEPT;
+    fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_STREAM].action_scope = ACTION_SCOPE_HOOK;
+
+    de_ctx->fw_policies = fw_policies;
+    return 0;
+}
+
+int DetectFirewallLoadDefaultPolicies(DetectEngineCtx *de_ctx)
+{
+    int r;
+    char policy_name[256];
+    char prefix[96] = "firewall.policies";
+    if (strlen(de_ctx->config_prefix) > 0) {
+        snprintf(prefix, sizeof(prefix), "%s.firewall.policies", de_ctx->config_prefix);
+    }
+
+    struct DetectFirewallPolicies *fw_policies = de_ctx->fw_policies;
+    if (fw_policies == NULL)
+        return -1;
+
+    r = snprintf(policy_name, sizeof(policy_name), "%s.packet.filter", prefix);
+    if (r < 0 || (size_t)r >= sizeof(policy_name)) {
+        FatalError("internal error: failed to assemble firewall policy config string");
+    }
+    r = DoParsePolicy(policy_name, &fw_policies->pkt[DETECT_FIREWALL_POLICY_PACKET_FILTER]);
+    if (r < 0)
+        return -1;
+    if (fw_policies->pkt[DETECT_FIREWALL_POLICY_PACKET_FILTER].action & ACTION_ALERT)
+        if (AddPktPolicySignature(fw_policies,
+                    &fw_policies->pkt[DETECT_FIREWALL_POLICY_PACKET_FILTER],
+                    DETECT_FIREWALL_POLICY_PACKET_FILTER) < 0)
+            return -1;
+
+    r = snprintf(policy_name, sizeof(policy_name), "%s.packet.pre-flow", prefix);
+    if (r < 0 || (size_t)r >= sizeof(policy_name)) {
+        FatalError("internal error: failed to assemble firewall policy config string");
+    }
+    r = DoParsePolicy(policy_name, &fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_FLOW]);
+    if (r < 0)
+        return -1;
+    if (fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_FLOW].action & ACTION_ALERT)
+        if (AddPktPolicySignature(fw_policies, &fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_FLOW],
+                    DETECT_FIREWALL_POLICY_PRE_FLOW) < 0)
+            return -1;
+
+    r = snprintf(policy_name, sizeof(policy_name), "%s.packet.pre-stream", prefix);
+    if (r < 0 || (size_t)r >= sizeof(policy_name)) {
+        FatalError("internal error: failed to assemble firewall policy config string");
+    }
+    r = DoParsePolicy(policy_name, &fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_STREAM]);
+    if (r < 0)
+        return -1;
+    if (fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_STREAM].action & ACTION_ALERT)
+        if (AddPktPolicySignature(fw_policies, &fw_policies->pkt[DETECT_FIREWALL_POLICY_PRE_STREAM],
+                    DETECT_FIREWALL_POLICY_PRE_STREAM) < 0)
+            return -1;
+
+    for (AppProto a = 0; a < g_alproto_max; a++) {
+        if (!AppProtoIsValid(a))
+            continue;
+
+        if (AppLayerParserSupportsSubStates(a)) {
+            uint8_t max_sub_state = AppLayerParserGetMaxSubState(a);
+            SCLogDebug("%s: max sub state for %u is %u", AppProtoToString(a), a, max_sub_state);
+            for (uint8_t s = 1; s <= max_sub_state; s++) {
+                SCLogDebug("%s: checking sub state %u", AppProtoToString(a), s);
+
+                const char *sub_state_name = AppLayerParserGetSubStateName(a, s);
+                if (sub_state_name == NULL)
+                    continue;
+
+                // iterate the states belonging to the sub state
+                const uint8_t max_state = AppLayerParserGetSubStateCompletion(
+                        a, s); // TODO allow different completion per direction?
+                /* to_server */
+                for (uint8_t state = 0; state <= max_state; state++) {
+                    SCLogDebug("protocol %s: sub state:%s state:%u", AppProtoToString(a),
+                            sub_state_name, state);
+                    const char *state_name =
+                            AppLayerParserGetSubStateProgressName(a, s, state, STREAM_TOSERVER);
+                    BUG_ON(state_name == NULL);
+                    SCLogDebug("protocol %s: sub state:%s state:%s", AppProtoToString(a),
+                            sub_state_name, state_name);
+                    if (DoParseAppSubStatePolicy(prefix, a, s, sub_state_name, state, state_name,
+                                max_state, STREAM_TOSERVER, fw_policies) < 0)
+                        return -1;
+                }
+                /* to_client */
+                for (uint8_t state = 0; state <= max_state; state++) {
+                    SCLogDebug("protocol %s: to_client: sub state:%s state:%u", AppProtoToString(a),
+                            sub_state_name, state);
+                    const char *state_name =
+                            AppLayerParserGetSubStateProgressName(a, s, state, STREAM_TOCLIENT);
+                    BUG_ON(state_name == NULL);
+                    SCLogDebug("protocol %s: to_client: sub state:%s state:%s", AppProtoToString(a),
+                            sub_state_name, state_name);
+                    if (DoParseAppSubStatePolicy(prefix, a, s, sub_state_name, state, state_name,
+                                max_state, STREAM_TOCLIENT, fw_policies) < 0)
+                        return -1;
+                }
+            }
+        } else {
+            const uint8_t complete_state_ts =
+                    (const uint8_t)AppLayerParserGetStateProgressCompletionStatus(
+                            a, STREAM_TOSERVER);
+            for (uint8_t state = 0; state <= complete_state_ts; state++) {
+                const char *name =
+                        AppLayerParserGetStateNameById(IPPROTO_TCP, a, state, STREAM_TOSERVER);
+                if (DoParseAppPolicy(prefix, a, name, state, complete_state_ts, STREAM_TOSERVER,
+                            fw_policies) < 0)
+                    return -1;
+            }
+            const uint8_t complete_state_tc =
+                    (const uint8_t)AppLayerParserGetStateProgressCompletionStatus(
+                            a, STREAM_TOCLIENT);
+            for (uint8_t state = 0; state <= complete_state_tc; state++) {
+                const char *name =
+                        AppLayerParserGetStateNameById(IPPROTO_TCP, a, state, STREAM_TOCLIENT);
+                if (DoParseAppPolicy(prefix, a, name, state, complete_state_tc, STREAM_TOCLIENT,
+                            fw_policies) < 0)
+                    return -1;
+            }
+        }
+    }
+    return 0;
 }
 
 /*
@@ -4808,52 +5629,30 @@ static int SigParseTestNegation01 (void)
  */
 static int SigParseTestNegation02 (void)
 {
-    int result = 0;
-    DetectEngineCtx *de_ctx;
-    Signature *s=NULL;
-
-    de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
-
-    s = SigInit(de_ctx,"alert tcp any !any -> any any (msg:\"SigTest41-02 src ip is !any \"; classtype:misc-activity; sid:410002; rev:1;)");
-    if (s != NULL) {
-        SigFree(de_ctx, s);
-        goto end;
-    }
-
-    result = 1;
-end:
-    if (de_ctx != NULL)
-        DetectEngineCtxFree(de_ctx);
-    return result;
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any !any -> any any (msg:\"SigTest41-02 src ip is !any \"; "
+            "classtype:misc-activity; sid:410002; rev:1;)");
+    FAIL_IF_NOT_NULL(s);
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 /**
  * \test check that we don't allow invalid negation options
  */
 static int SigParseTestNegation03 (void)
 {
-    int result = 0;
-    DetectEngineCtx *de_ctx;
-    Signature *s=NULL;
-
-    de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
-
-    s = SigInit(de_ctx,"alert tcp any any -> any [80:!80] (msg:\"SigTest41-03 dst port [80:!80] \"; classtype:misc-activity; sid:410003; rev:1;)");
-    if (s != NULL) {
-        SigFree(de_ctx, s);
-        goto end;
-    }
-
-    result = 1;
-end:
-    if (de_ctx != NULL)
-        DetectEngineCtxFree(de_ctx);
-    return result;
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any [80:!80] (msg:\"SigTest41-03 dst port [80:!80] \"; "
+            "classtype:misc-activity; sid:410003; rev:1;)");
+    FAIL_IF_NOT_NULL(s);
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 /**
  * \test check that we don't allow invalid negation options
@@ -5112,26 +5911,16 @@ end:
  */
 static int SigParseTestAppLayerTLS03(void)
 {
-    int result = 0;
-    DetectEngineCtx *de_ctx;
-    Signature *s=NULL;
-
-    de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    s = SigInit(de_ctx,"alert tls any any -> any any (msg:\"SigParseTestAppLayerTLS03 \"; tls.version:2.5; sid:410006; rev:1;)");
-    if (s != NULL) {
-        SigFree(de_ctx, s);
-        goto end;
-    }
-
-    result = 1;
-end:
-    if (de_ctx != NULL)
-        DetectEngineCtxFree(de_ctx);
-    return result;
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tls any any -> any any (msg:\"SigParseTestAppLayerTLS03 \"; "
+            "tls.version:2.5; sid:410006; rev:1;)");
+    FAIL_IF_NOT_NULL(s);
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 
 static int SigParseTestUnbalancedQuotes01(void)

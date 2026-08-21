@@ -29,15 +29,14 @@ use std::os::raw::c_char;
 use std::os::raw::c_int;
 use std::ptr;
 use std::str;
-use suricata_sys::sys::SCConfGet;
 use suricata_sys::sys::SCConfGetChildValue;
 use suricata_sys::sys::SCConfGetChildValueBool;
-use suricata_sys::sys::SCConfGetNode;
-use suricata_sys::sys::SCConfNode;
-use suricata_sys::sys::SCConfNodeLookupChild;
 use suricata_sys::sys::SCConfGetFirstNode;
 use suricata_sys::sys::SCConfGetNextNode;
+use suricata_sys::sys::SCConfGetNode;
 use suricata_sys::sys::SCConfGetValueNode;
+use suricata_sys::sys::SCConfNode;
+use suricata_sys::sys::SCConfNodeLookupChild;
 
 pub fn conf_get_node(key: &str) -> Option<ConfNode> {
     let key = if let Ok(key) = CString::new(key) {
@@ -54,36 +53,7 @@ pub fn conf_get_node(key: &str) -> Option<ConfNode> {
     }
 }
 
-// Return the string value of a configuration value.
-pub fn conf_get(key: &str) -> Option<&str> {
-    let mut vptr: *const c_char = ptr::null_mut();
-
-    unsafe {
-        let s = CString::new(key).unwrap();
-        if SCConfGet(s.as_ptr(), &mut vptr) != 1 {
-            SCLogDebug!("Failed to find value for key {}", key);
-            return None;
-        }
-    }
-
-    if vptr.is_null() {
-        return None;
-    }
-
-    let value = str::from_utf8(unsafe { CStr::from_ptr(vptr).to_bytes() }).unwrap();
-
-    return Some(value);
-}
-
-// Return the value of key as a boolean. A value that is not set is
-// the same as having it set to false.
-pub fn conf_get_bool(key: &str) -> bool {
-    if let Some("1" | "yes" | "true" | "on") = conf_get(key) {
-        return true;
-    }
-
-    return false;
-}
+pub use suricata_ffi::conf::{conf_get, conf_get_bool};
 
 /// Wrap a Suricata ConfNode and expose some of its methods with a
 /// Rust friendly interface.
@@ -161,10 +131,7 @@ impl ConfNode {
             }
         }
 
-        if vptr == 1 {
-            return true;
-        }
-        return false;
+        return vptr == 1;
     }
 }
 
@@ -212,7 +179,8 @@ pub fn get_memval(arg: &str) -> Result<u64, &'static str> {
     let r: IResult<&str, (f64, &str)> = (
         preceded(multispace0, double),
         preceded(multispace0, verify(not_line_ending, |c: &str| c.len() < 4)),
-    ).parse(arg);
+    )
+        .parse(arg);
     if let Ok(r) = r {
         val = (r.1).0;
         unit = (r.1).1;

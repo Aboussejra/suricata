@@ -81,7 +81,7 @@ void DetectFilenameRegister(void)
 {
     sigmatch_table[DETECT_FILENAME].name = "filename";
     sigmatch_table[DETECT_FILENAME].desc = "match on the file name";
-    sigmatch_table[DETECT_FILENAME].url = "/rules/file-keywords.html#filename";
+    sigmatch_table[DETECT_FILENAME].url = "/rules/file-keywords.html#file-name";
     sigmatch_table[DETECT_FILENAME].Setup = DetectFilenameSetup;
 #ifdef UNITTESTS
     sigmatch_table[DETECT_FILENAME].RegisterTests = DetectFilenameRegisterTests;
@@ -98,7 +98,7 @@ void DetectFilenameRegister(void)
 
     sigmatch_table[DETECT_FILE_NAME].name = "file.name";
     sigmatch_table[DETECT_FILE_NAME].desc = "sticky buffer to match on the file name";
-    sigmatch_table[DETECT_FILE_NAME].url = "/rules/file-keywords.html#filename";
+    sigmatch_table[DETECT_FILE_NAME].url = "/rules/file-keywords.html#file-name";
     sigmatch_table[DETECT_FILE_NAME].Setup = DetectFilenameSetupSticky;
     sigmatch_table[DETECT_FILE_NAME].flags = SIGMATCH_OPTIONAL_OPT | SIGMATCH_INFO_STICKY_BUFFER |
                                              SIGMATCH_SUPPORT_DIR | SIGMATCH_INFO_MULTI_BUFFER;
@@ -342,8 +342,8 @@ static int PrefilterMpmFilenameRegister(DetectEngineCtx *de_ctx, SigGroupHead *s
     pectx->mpm_ctx = mpm_ctx;
     pectx->transforms = &mpm_reg->transforms;
 
-    return PrefilterAppendTxEngine(de_ctx, sgh, PrefilterTxFilename,
-            mpm_reg->app_v2.alproto, mpm_reg->app_v2.tx_min_progress,
+    return PrefilterAppendTxEngineSubState(de_ctx, sgh, PrefilterTxFilename,
+            mpm_reg->app_v2.alproto, mpm_reg->app_v2.sub_state, mpm_reg->app_v2.tx_min_progress,
             pectx, PrefilterMpmFilenameFree, mpm_reg->pname);
 }
 

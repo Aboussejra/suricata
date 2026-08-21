@@ -49,10 +49,8 @@
 #include "output-json-anomaly.h"
 #include "output-json-flow.h"
 #include "output-json-netflow.h"
-#include "log-cf-common.h"
 #include "output-json-drop.h"
 #include "output-eve-stream.h"
-#include "log-httplog.h"
 #include "output-json-http.h"
 #include "output-json-dns.h"
 #include "output-json-mdns.h"
@@ -83,10 +81,10 @@
 #include "app-layer-parser.h"
 #include "output-filestore.h"
 #include "output-json-arp.h"
+#include "output-json-llmnr.h"
 
 typedef struct RootLogger_ {
     OutputLogFunc LogFunc;
-    OutputFlushFunc FlushFunc;
     ThreadInitFunc ThreadInit;
     ThreadDeinitFunc ThreadDeinit;
     OutputGetActiveCountFunc ActiveCntFunc;
@@ -210,7 +208,6 @@ void OutputRegisterPacketModule(LoggerId id, const char *name, const char *conf_
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->PacketLogFunc = output_module_functions->LogFunc;
-    module->PacketFlushFunc = output_module_functions->FlushFunc;
     module->PacketConditionFunc = output_module_functions->ConditionFunc;
     module->ThreadInit = output_module_functions->ThreadInitFunc;
     module->ThreadDeinit = output_module_functions->ThreadDeinitFunc;
@@ -250,7 +247,6 @@ void OutputRegisterPacketSubModule(LoggerId id, const char *parent_name, const c
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->PacketLogFunc = output_logger_functions->LogFunc;
-    module->PacketFlushFunc = output_logger_functions->FlushFunc;
     module->PacketConditionFunc = output_logger_functions->ConditionFunc;
     module->ThreadInit = output_logger_functions->ThreadInitFunc;
     module->ThreadDeinit = output_logger_functions->ThreadDeinitFunc;
@@ -304,9 +300,9 @@ error:
 }
 
 static void OutputRegisterTxSubModuleWrapper(LoggerId id, const char *parent_name, const char *name,
-        const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto, TxLogger TxLogFunc,
-        int tc_log_progress, int ts_log_progress, TxLoggerCondition TxLogCondition,
-        ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit)
+        const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto,
+        const uint8_t sub_state, TxLogger TxLogFunc, int tc_log_progress, int ts_log_progress,
+        TxLoggerCondition TxLogCondition, ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit)
 {
     if (unlikely(TxLogFunc == NULL)) {
         goto error;
@@ -325,6 +321,7 @@ static void OutputRegisterTxSubModuleWrapper(LoggerId id, const char *parent_nam
     module->TxLogFunc = TxLogFunc;
     module->TxLogCondition = TxLogCondition;
     module->alproto = alproto;
+    module->sub_state = sub_state;
     module->tc_log_progress = tc_log_progress;
     module->ts_log_progress = ts_log_progress;
     module->ThreadInit = ThreadInit;
@@ -357,8 +354,8 @@ void OutputRegisterTxSubModuleWithCondition(LoggerId id, const char *parent_name
         const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto, TxLogger TxLogFunc,
         TxLoggerCondition TxLogCondition, ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit)
 {
-    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, TxLogFunc,
-            -1, -1, TxLogCondition, ThreadInit, ThreadDeinit);
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, 0,
+            TxLogFunc, -1, -1, TxLogCondition, ThreadInit, ThreadDeinit);
 }
 
 /**
@@ -382,8 +379,17 @@ void OutputRegisterTxSubModuleWithProgress(LoggerId id, const char *parent_name,
         int tc_log_progress, int ts_log_progress, ThreadInitFunc ThreadInit,
         ThreadDeinitFunc ThreadDeinit)
 {
-    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, TxLogFunc,
-            tc_log_progress, ts_log_progress, NULL, ThreadInit, ThreadDeinit);
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, 0,
+            TxLogFunc, tc_log_progress, ts_log_progress, NULL, ThreadInit, ThreadDeinit);
+}
+
+void OutputRegisterTxSubModuleWithProgressSubState(LoggerId id, const char *parent_name,
+        const char *name, const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto,
+        const uint8_t sub_state, TxLogger TxLogFunc, uint8_t tc_log_progress,
+        uint8_t ts_log_progress, ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit)
+{
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, sub_state,
+            TxLogFunc, tc_log_progress, ts_log_progress, NULL, ThreadInit, ThreadDeinit);
 }
 
 /**
@@ -406,8 +412,8 @@ void OutputRegisterTxSubModule(LoggerId id, const char *parent_name, const char 
         const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto, TxLogger TxLogFunc,
         ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit)
 {
-    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, TxLogFunc,
-            -1, -1, NULL, ThreadInit, ThreadDeinit);
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc, alproto, 0,
+            TxLogFunc, -1, -1, NULL, ThreadInit, ThreadDeinit);
 }
 
 /**
@@ -660,6 +666,7 @@ void OutputDeregisterAll(void)
 
     while ((module = TAILQ_FIRST(&output_modules))) {
         TAILQ_REMOVE(&output_modules, module, entries);
+        DEBUG_VALIDATE_BUG_ON(TAILQ_FIRST(&output_modules) == module);
         SCFree(module);
     }
     SCFree(simple_json_applayer_loggers);
@@ -784,21 +791,6 @@ void SCOnLoggingReady(void)
     }
 }
 
-TmEcode OutputLoggerFlush(ThreadVars *tv, Packet *p, void *thread_data)
-{
-    LoggerThreadStore *thread_store = (LoggerThreadStore *)thread_data;
-    RootLogger *logger = TAILQ_FIRST(&active_loggers);
-    LoggerThreadStoreNode *thread_store_node = TAILQ_FIRST(thread_store);
-    while (logger && thread_store_node) {
-        if (logger->FlushFunc)
-            logger->FlushFunc(tv, p, thread_store_node->thread_data);
-
-        logger = TAILQ_NEXT(logger, entries);
-        thread_store_node = TAILQ_NEXT(thread_store_node, entries);
-    }
-    return TM_ECODE_OK;
-}
-
 TmEcode OutputLoggerLog(ThreadVars *tv, Packet *p, void *thread_data)
 {
     LoggerThreadStore *thread_store = (LoggerThreadStore *)thread_data;
@@ -917,6 +909,7 @@ void OutputClearActiveLoggers(void)
     RootLogger *logger;
     while ((logger = TAILQ_FIRST(&active_loggers)) != NULL) {
         TAILQ_REMOVE(&active_loggers, logger, entries);
+        DEBUG_VALIDATE_BUG_ON(TAILQ_FIRST(&active_loggers) == logger);
         SCFree(logger);
     }
 }
@@ -966,6 +959,7 @@ void OutputRegisterRootLoggers(void)
     // ALPROTO_DCERPC special: uses state
     RegisterSimpleJsonApplayerLogger(ALPROTO_DNS, (EveJsonSimpleTxLogFunc)AlertJsonDns, NULL);
     RegisterSimpleJsonApplayerLogger(ALPROTO_MDNS, (EveJsonSimpleTxLogFunc)AlertJsonMdns, NULL);
+    RegisterSimpleJsonApplayerLogger(ALPROTO_LLMNR, (EveJsonSimpleTxLogFunc)AlertJsonLLMNR, NULL);
     // either need a cast here or in rust for ModbusTransaction, done here
     RegisterSimpleJsonApplayerLogger(ALPROTO_MODBUS, (EveJsonSimpleTxLogFunc)SCModbusToJson, NULL);
     RegisterSimpleJsonApplayerLogger(ALPROTO_ENIP, (EveJsonSimpleTxLogFunc)SCEnipLoggerLog, NULL);
@@ -980,7 +974,7 @@ void OutputRegisterRootLoggers(void)
     RegisterSimpleJsonApplayerLogger(
             ALPROTO_KRB5, (EveJsonSimpleTxLogFunc)SCKrb5LogJsonResponse, NULL);
     RegisterSimpleJsonApplayerLogger(ALPROTO_QUIC, (EveJsonSimpleTxLogFunc)SCQuicLogJson, NULL);
-    // ALPROTO_DHCP TODO missing
+    RegisterSimpleJsonApplayerLogger(ALPROTO_DHCP, (EveJsonSimpleTxLogFunc)SCDhcpLogJson, NULL);
     RegisterSimpleJsonApplayerLogger(ALPROTO_SIP, (EveJsonSimpleTxLogFunc)SCSipLogJson, NULL);
     RegisterSimpleJsonApplayerLogger(ALPROTO_RFB, (EveJsonSimpleTxLogFunc)SCRfbJsonLogger, NULL);
     RegisterSimpleJsonApplayerLogger(ALPROTO_POP3, (EveJsonSimpleTxLogFunc)SCPop3LoggerLog, NULL);
@@ -1088,9 +1082,6 @@ static TxLogger JsonLoggerFromDir(uint8_t dir)
  */
 void OutputRegisterLoggers(void)
 {
-    /* custom format log*/
-    LogCustomFormatRegister();
-
     LuaLogRegister();
     /* fast log */
     AlertFastLogRegister();
@@ -1105,11 +1096,15 @@ void OutputRegisterLoggers(void)
     /* email logs */
     JsonSmtpLogRegister();
     /* http log */
-    LogHttpLogRegister();
     JsonHttpLogRegister();
-    OutputRegisterTxSubModuleWithProgress(LOGGER_JSON_TX, "eve-log", "LogHttp2Log", "eve-log.http2",
-            OutputJsonLogInitSub, ALPROTO_HTTP2, JsonGenericDirFlowLogger, HTTP2StateClosed,
-            HTTP2StateClosed, JsonLogThreadInit, JsonLogThreadDeinit);
+    OutputRegisterTxSubModuleWithProgressSubState(LOGGER_JSON_TX, "eve-log", "LogHttp2Log::stream",
+            "eve-log.http2", OutputJsonLogInitSub, ALPROTO_HTTP2, HTTP2TxTypeStream,
+            JsonGenericDirFlowLogger, HTTP2ProgClosed, HTTP2ProgClosed, JsonLogThreadInit,
+            JsonLogThreadDeinit);
+    OutputRegisterTxSubModuleWithProgressSubState(LOGGER_JSON_TX, "eve-log", "LogHttp2Log::global",
+            "eve-log.http2", OutputJsonLogInitSub, ALPROTO_HTTP2, HTTP2TxTypeGlobal,
+            JsonGenericDirFlowLogger, HTTP2ProgGlobalComplete, HTTP2ProgGlobalComplete,
+            JsonLogThreadInit, JsonLogThreadDeinit);
     /* tls log */
     JsonTlsLogRegister();
     LogTlsStoreRegister();
@@ -1243,6 +1238,8 @@ void OutputRegisterLoggers(void)
     }
     /* ARP JSON logger */
     JsonArpLogRegister();
+    /* LLMNR JSON logger */
+    JsonLLMNRLogRegister();
 
     for (size_t i = 0; i < preregistered_loggers_nb; i++) {
         OutputRegisterTxSubModule(LOGGER_JSON_TX, "eve-log", preregistered_loggers[i].logname,

@@ -26,18 +26,48 @@
 #define SURICATA_DETECT_FLOWBITS_H
 
 #define DETECT_FLOWBITS_CMD_SET      0
-#define DETECT_FLOWBITS_CMD_TOGGLE   1
-#define DETECT_FLOWBITS_CMD_UNSET    2
-#define DETECT_FLOWBITS_CMD_ISNOTSET 3
-#define DETECT_FLOWBITS_CMD_ISSET    4
-#define DETECT_FLOWBITS_CMD_MAX      5
+#define DETECT_FLOWBITS_CMD_UNSET    1
+#define DETECT_FLOWBITS_CMD_ISNOTSET 2
+#define DETECT_FLOWBITS_CMD_ISSET    3
+#define DETECT_FLOWBITS_CMD_MAX      4
+
+struct FBAnalyzer {
+    struct FBAnalyze *array;
+    uint32_t array_size;
+};
+
+typedef struct SigIdentifier_ {
+    uint32_t iid;
+    uint32_t sid;
+} SigIdentifier;
+
+struct FBAnalyze {
+    uint16_t cnts[DETECT_FLOWBITS_CMD_MAX];
+    uint16_t state_cnts[DETECT_FLOWBITS_CMD_MAX];
+
+    SigIdentifier *set_iids;
+    uint32_t set_iids_idx;
+    uint32_t set_iids_size;
+
+    SigIdentifier *isset_iids;
+    uint32_t isset_iids_idx;
+    uint32_t isset_iids_size;
+
+    SigIdentifier *isnotset_iids;
+    uint32_t isnotset_iids_idx;
+    uint32_t isnotset_iids_size;
+
+    SigIdentifier *unset_iids;
+    uint32_t unset_iids_idx;
+    uint32_t unset_iids_size;
+};
 
 typedef struct DetectFlowbitsData_ {
     uint32_t idx;
     uint8_t cmd;
     uint8_t or_list_size;
     /** Flag to trigger post rule match prefilter following a 'set' match. */
-    bool post_rule_match_prefilter; /**< set/toggle command should trigger post-rule-match
+    bool post_rule_match_prefilter; /**< set command should trigger post-rule-match
                                        "prefilter" */
     uint32_t *or_list;
 } DetectFlowbitsData;
@@ -45,4 +75,6 @@ typedef struct DetectFlowbitsData_ {
 /* prototypes */
 void DetectFlowbitsRegister (void);
 
+int DetectFlowbitsAnalyzeSignature(const Signature *, struct FBAnalyzer *);
+void FBAnalyzerFree(struct FBAnalyzer *);
 #endif /* SURICATA_DETECT_FLOWBITS_H */

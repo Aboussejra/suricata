@@ -31,8 +31,6 @@
 typedef struct StorageMapping_ {
     const char *name;
     StorageEnum type; // host, flow, tx, stream, ssn, etc
-    unsigned int size;
-    void *(*Alloc)(unsigned int);
     void (*Free)(void *);
 } StorageMapping;
 
@@ -67,7 +65,7 @@ static const char *StoragePrintType(StorageEnum type)
     return "invalid";
 }
 
-void StorageInit(void)
+void SCStorageInit(void)
 {
     memset(&storage_max_id, 0x00, sizeof(storage_max_id));
     storage_list = NULL;
@@ -75,7 +73,7 @@ void StorageInit(void)
     storage_registration_closed = 0;
 }
 
-void StorageCleanup(void)
+void SCStorageCleanup(void)
 {
     if (storage_map) {
         int i;
@@ -99,13 +97,12 @@ void StorageCleanup(void)
     storage_list = NULL;
 }
 
-int StorageRegister(const StorageEnum type, const char *name, const unsigned int size, void *(*Alloc)(unsigned int), void (*Free)(void *))
+int SCStorageRegister(const StorageEnum type, const char *name, void (*Free)(void *))
 {
     if (storage_registration_closed)
         return -1;
 
-    if (type >= STORAGE_MAX || name == NULL || strlen(name) == 0 ||
-            size == 0 || (size != sizeof(void *) && Alloc == NULL) || Free == NULL)
+    if (type >= STORAGE_MAX || name == NULL || strlen(name) == 0 || Free == NULL)
         return -1;
 
     StorageList *list = storage_list;
@@ -126,8 +123,6 @@ int StorageRegister(const StorageEnum type, const char *name, const unsigned int
 
     entry->map.type = type;
     entry->map.name = name;
-    entry->map.size = size;
-    entry->map.Alloc = Alloc;
     entry->map.Free = Free;
 
     entry->id = storage_max_id[type]++;
@@ -137,7 +132,7 @@ int StorageRegister(const StorageEnum type, const char *name, const unsigned int
     return entry->id;
 }
 
-int StorageFinalize(void)
+int SCStorageFinalize(void)
 {
     int count = 0;
     int i;
@@ -169,8 +164,6 @@ int StorageFinalize(void)
         if (storage_map[entry->map.type] != NULL) {
             storage_map[entry->map.type][entry->id].name = entry->map.name;
             storage_map[entry->map.type][entry->id].type = entry->map.type;
-            storage_map[entry->map.type][entry->id].size = entry->map.size;
-            storage_map[entry->map.type][entry->id].Alloc = entry->map.Alloc;
             storage_map[entry->map.type][entry->id].Free = entry->map.Free;
         }
 
@@ -188,15 +181,14 @@ int StorageFinalize(void)
         int j;
         for (j = 0; j < storage_max_id[i]; j++) {
             StorageMapping *m = &storage_map[i][j];
-            SCLogDebug("type \"%s\" name \"%s\" size \"%"PRIuMAX"\"",
-                    StoragePrintType(m->type), m->name, (uintmax_t)m->size);
+            SCLogDebug("type \"%s\" name \"%s\"", StoragePrintType(m->type), m->name);
         }
     }
 #endif
     return 0;
 }
 
-unsigned int StorageGetCnt(StorageEnum type)
+unsigned int SCStorageGetCnt(StorageEnum type)
 {
     return storage_max_id[type];
 }
@@ -207,12 +199,12 @@ unsigned int StorageGetCnt(StorageEnum type)
  *
  *  \todo we could return -1 when registration isn't closed yet, however
  *        this will break lots of tests currently, so not doing it now */
-unsigned int StorageGetSize(StorageEnum type)
+unsigned int SCStorageGetSize(StorageEnum type)
 {
     return storage_max_id[type] * sizeof(void *);
 }
 
-void *StorageGetById(const Storage *storage, const StorageEnum type, const int id)
+void *SCStorageGetById(const Storage *storage, const StorageEnum type, const int id)
 {
 #ifdef DEBUG
     BUG_ON(!storage_registration_closed);
@@ -223,7 +215,7 @@ void *StorageGetById(const Storage *storage, const StorageEnum type, const int i
     return storage[id].ptr;
 }
 
-int StorageSetById(Storage *storage, const StorageEnum type, const int id, void *ptr)
+int SCStorageSetById(Storage *storage, const StorageEnum type, const int id, void *ptr)
 {
 #ifdef DEBUG
     BUG_ON(!storage_registration_closed);
@@ -235,25 +227,7 @@ int StorageSetById(Storage *storage, const StorageEnum type, const int id, void 
     return 0;
 }
 
-void *StorageAllocByIdPrealloc(Storage *storage, StorageEnum type, int id)
-{
-#ifdef DEBUG
-    BUG_ON(!storage_registration_closed);
-#endif
-    SCLogDebug("storage %p id %d", storage, id);
-
-    StorageMapping *map = &storage_map[type][id];
-    if (storage[id].ptr == NULL && map->Alloc != NULL) {
-        storage[id].ptr = map->Alloc(map->size);
-        if (storage[id].ptr == NULL) {
-            return NULL;
-        }
-    }
-
-    return storage[id].ptr;
-}
-
-void StorageFreeById(Storage *storage, StorageEnum type, int id)
+void SCStorageFreeById(Storage *storage, StorageEnum type, int id)
 {
 #ifdef DEBUG
     BUG_ON(!storage_registration_closed);
@@ -275,7 +249,7 @@ void StorageFreeById(Storage *storage, StorageEnum type, int id)
     }
 }
 
-void StorageFreeAll(Storage *storage, StorageEnum type)
+void SCStorageFreeAll(Storage *storage, StorageEnum type)
 {
     if (storage == NULL)
         return;

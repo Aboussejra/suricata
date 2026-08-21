@@ -149,8 +149,8 @@ error:
 
 void IPPairClearMemory(IPPair *h)
 {
-    if (IPPairStorageSize() > 0)
-        IPPairFreeStorage(h);
+    if (SCIPPairStorageSize() > 0)
+        SCIPPairFreeStorage(h);
 }
 
 #define IPPAIR_DEFAULT_HASHSIZE 4096
@@ -162,9 +162,9 @@ void IPPairClearMemory(IPPair *h)
 void IPPairInitConfig(bool quiet)
 {
     SCLogDebug("initializing ippair engine...");
-    if (IPPairStorageSize() > 0) {
-        DEBUG_VALIDATE_BUG_ON(sizeof(IPPair) + IPPairStorageSize() > UINT16_MAX);
-        g_ippair_size = (uint16_t)(sizeof(IPPair) + IPPairStorageSize());
+    if (SCIPPairStorageSize() > 0) {
+        DEBUG_VALIDATE_BUG_ON(sizeof(IPPair) + SCIPPairStorageSize() > UINT16_MAX);
+        g_ippair_size = (uint16_t)(sizeof(IPPair) + SCIPPairStorageSize());
     }
 
     memset(&ippair_config,  0, sizeof(ippair_config));
@@ -187,7 +187,7 @@ void IPPairInitConfig(bool quiet)
 
     /** set config values for memcap, prealloc and hash_size */
     uint64_t ippair_memcap;
-    if ((SCConfGet("ippair.memcap", &conf_val)) == 1) {
+    if ((SCConfGetNonNull("ippair.memcap", &conf_val)) == 1) {
         if (ParseSizeStringU64(conf_val, &ippair_memcap) < 0) {
             SCLogError("Error parsing ippair.memcap "
                        "from conf file - %s.  Killing engine",
@@ -197,14 +197,14 @@ void IPPairInitConfig(bool quiet)
             SC_ATOMIC_SET(ippair_config.memcap, ippair_memcap);
         }
     }
-    if ((SCConfGet("ippair.hash-size", &conf_val)) == 1) {
+    if ((SCConfGetNonNull("ippair.hash-size", &conf_val)) == 1) {
         if (StringParseUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
             ippair_config.hash_size = configval;
         }
     }
 
-    if ((SCConfGet("ippair.prealloc", &conf_val)) == 1) {
+    if ((SCConfGetNonNull("ippair.prealloc", &conf_val)) == 1) {
         if (StringParseUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
             ippair_config.prealloc = configval;
@@ -334,7 +334,7 @@ void IPPairCleanup(void)
             while (h) {
                 if ((SC_ATOMIC_GET(h->use_cnt) > 0)) {
                     /* iprep is attached to ippair only clear local storage */
-                    IPPairFreeStorage(h);
+                    SCIPPairFreeStorage(h);
                     h = h->hnext;
                 } else {
                     IPPair *n = h->hnext;
@@ -434,8 +434,11 @@ static inline int IPPairCompare(IPPair *p, Address *a, Address *b)
 {
     /* compare in both directions */
     if ((CMP_ADDR(&p->a[0], a) && CMP_ADDR(&p->a[1], b)) ||
-        (CMP_ADDR(&p->a[0], b) && CMP_ADDR(&p->a[1], a)))
-        return 1;
+            (CMP_ADDR(&p->a[0], b) && CMP_ADDR(&p->a[1], a))) {
+        if (p->a[0].family == a->family) {
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -751,5 +754,5 @@ static IPPair *IPPairGetUsedIPPair(void)
 
 void IPPairRegisterUnittests(void)
 {
-    RegisterIPPairStorageTests();
+    SCRegisterIPPairStorageTests();
 }

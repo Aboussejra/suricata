@@ -41,12 +41,12 @@ typedef struct DetectTransformPcrexformData {
 static int DetectTransformPcrexformSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectTransformPcrexformFree(DetectEngineCtx *, void *);
 static void DetectTransformPcrexform(
-        DetectEngineThreadCtx *det_ctx, InspectionBuffer *buffer, void *options);
+        DetectEngineThreadCtx *det_ctx, InspectionBuffer *buffer, const void *options);
 #ifdef UNITTESTS
 void DetectTransformPcrexformRegisterTests (void);
 #endif
 
-static void DetectTransformPcrexformId(const uint8_t **data, uint32_t *length, void *context)
+static void DetectTransformPcrexformId(const uint8_t **data, uint32_t *length, const void *context)
 {
     if (context) {
         DetectTransformPcrexformData *pxd = (DetectTransformPcrexformData *)context;
@@ -60,7 +60,7 @@ void DetectTransformPcrexformRegister(void)
     sigmatch_table[DETECT_TRANSFORM_PCREXFORM].name = "pcrexform";
     sigmatch_table[DETECT_TRANSFORM_PCREXFORM].desc =
         "modify buffer via PCRE before inspection";
-    sigmatch_table[DETECT_TRANSFORM_PCREXFORM].url = "/rules/transforms.html#pcre-xform";
+    sigmatch_table[DETECT_TRANSFORM_PCREXFORM].url = "/rules/transforms.html#pcrexform";
     sigmatch_table[DETECT_TRANSFORM_PCREXFORM].Transform =
         DetectTransformPcrexform;
     sigmatch_table[DETECT_TRANSFORM_PCREXFORM].TransformId = DetectTransformPcrexformId;
@@ -157,11 +157,11 @@ static int DetectTransformPcrexformSetup (DetectEngineCtx *de_ctx, Signature *s,
 }
 
 static void DetectTransformPcrexform(
-        DetectEngineThreadCtx *det_ctx, InspectionBuffer *buffer, void *options)
+        DetectEngineThreadCtx *det_ctx, InspectionBuffer *buffer, const void *options)
 {
     const char *input = (const char *)buffer->inspect;
     const uint32_t input_len = buffer->inspect_len;
-    DetectTransformPcrexformData *pxd = options;
+    const DetectTransformPcrexformData *pxd = options;
 
     pcre2_match_data *match = pcre2_match_data_create_from_pattern(pxd->regex, NULL);
     int ret = pcre2_match(pxd->regex, (PCRE2_SPTR8)input, input_len, 0, 0, match, pxd->context);

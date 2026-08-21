@@ -49,6 +49,13 @@ enum DetectKeywordId {
     DETECT_ICMP_ID,
     DETECT_ICMP_SEQ,
     DETECT_ICMPV4HDR,
+    DETECT_IGMPHDR,
+    DETECT_IGMP_TYPE,
+    DETECT_SCTPHDR,
+    DETECT_SCTP_CHUNK_TYPE,
+    DETECT_SCTP_CHUNK_CNT,
+    DETECT_SCTP_VTAG,
+    DETECT_SCTP_CHUNK_DATA,
     DETECT_DSIZE,
 
     DETECT_FLOW,
@@ -116,6 +123,7 @@ enum DetectKeywordId {
     DETECT_UDPV6_CSUM,
     DETECT_ICMPV4_CSUM,
     DETECT_ICMPV6_CSUM,
+    DETECT_IGMP_CSUM,
     DETECT_STREAM_SIZE,
     DETECT_DETECTION_FILTER,
 
@@ -206,10 +214,6 @@ enum DetectKeywordId {
     DETECT_HTTP_REQUEST_HEADER,
     DETECT_HTTP_RESPONSE_HEADER,
 
-    DETECT_DCE_IFACE,
-    DETECT_DCE_OPNUM,
-    DETECT_DCE_STUB_DATA,
-
     DETECT_ENGINE_EVENT,
     DETECT_STREAM_EVENT,
 
@@ -254,15 +258,10 @@ enum DetectKeywordId {
     DETECT_DNP3IND,
     DETECT_DNP3OBJ,
 
-    DETECT_KRB5_ERRCODE,
-    DETECT_KRB5_CNAME,
-    DETECT_KRB5_SNAME,
-    DETECT_KRB5_TICKET_ENCRYPTION,
-
     DETECT_SIP_METHOD,
     DETECT_SIP_URI,
     DETECT_TEMPLATE,
-    DETECT_TEMPLATE2,
+    DETECT_ETHERHDR,
     DETECT_IPV4HDR,
     DETECT_IPV6HDR,
     DETECT_ICMPV6HDR,
@@ -301,6 +300,61 @@ extern int DETECT_TBLSIZE;
 extern int DETECT_TBLSIZE_IDX;
 // step for reallocating sigmatch_table
 #define DETECT_TBLSIZE_STEP 256
+
+// no macro for bindgen
+/** sigmatch has no options, so the parser shouldn't expect any */
+#define SIGMATCH_NOOPT (1UL << (0))
+/** sigmatch is compatible with a ip only rule */
+#define SIGMATCH_IPONLY_COMPAT (1UL << (1))
+/** sigmatch is compatible with a decode event only rule */
+#define SIGMATCH_DEONLY_COMPAT (1UL << (2))
+/** sigmatch may have options, so the parser should be ready to
+ *  deal with both cases */
+#define SIGMATCH_OPTIONAL_OPT (1UL << (3))
+/** input may be wrapped in double quotes. They will be stripped before
+ *  input data is passed to keyword parser */
+#define SIGMATCH_QUOTES_OPTIONAL (1UL << (4))
+/** input MUST be wrapped in double quotes. They will be stripped before
+ *  input data is passed to keyword parser. Missing double quotes lead to
+ *  error and signature invalidation. */
+#define SIGMATCH_QUOTES_MANDATORY (1UL << (5))
+/** negation parsing is handled by the rule parser. Signature::init_data::negated
+ *  will be set to true or false prior to calling the keyword parser. Exclamation
+ *  mark is stripped from the input to the keyword parser. */
+#define SIGMATCH_HANDLE_NEGATION (1UL << (6))
+/** keyword is a content modifier */
+#define SIGMATCH_INFO_CONTENT_MODIFIER (1UL << (7))
+/** keyword is a sticky buffer */
+#define SIGMATCH_INFO_STICKY_BUFFER (1UL << (8))
+/** keyword is deprecated: used to suggest an alternative */
+#define SIGMATCH_INFO_DEPRECATED (1UL << (9))
+/** strict parsing is enabled */
+#define SIGMATCH_STRICT_PARSING (1UL << (10))
+/** keyword supported by firewall rules */
+#define SIGMATCH_SUPPORT_FIREWALL (1UL << (11))
+/** keyword supporting setting an optional direction */
+#define SIGMATCH_SUPPORT_DIR (1UL << (12))
+/** keyword is a multi buffer */
+#define SIGMATCH_INFO_MULTI_BUFFER (1UL << (13))
+/** keyword is a unsigned 8-bit integer */
+#define SIGMATCH_INFO_UINT8 (1UL << (14))
+/** keyword is a unsigned 16-bit integer */
+#define SIGMATCH_INFO_UINT16 (1UL << (15))
+/** keyword is a unsigned 32-bit integer */
+#define SIGMATCH_INFO_UINT32 (1UL << (16))
+/** keyword is a unsigned 64-bit integer */
+#define SIGMATCH_INFO_UINT64 (1UL << (17))
+/** keyword is a multi uint */
+#define SIGMATCH_INFO_MULTI_UINT (1UL << (18))
+/** keyword is an uint with enumeration stringer */
+#define SIGMATCH_INFO_ENUM_UINT (1UL << (19))
+/** keyword is an uint with bitflags */
+#define SIGMATCH_INFO_BITFLAGS_UINT (1UL << (20))
+/** keyword cannot be used in firewall rules */
+#define SIGMATCH_BAN_FIREWALL_RULE (1UL << (21))
+/** keyword cannot be used in firewall mode */
+#define SIGMATCH_BAN_FIREWALL_MODE (1UL << (22))
+
 int SigTableList(const char *keyword);
 void SigTableCleanup(void);
 void SigTableInit(void);

@@ -38,7 +38,6 @@ pub struct LuaState {
 }
 
 impl LuaState {
-
     pub fn newtable(&self) {
         unsafe {
             lua_createtable(self.lua, 0, 0);
@@ -52,6 +51,12 @@ impl LuaState {
     }
 
     pub fn pushstring(&self, val: &str) {
+        unsafe {
+            lua_pushlstring(self.lua, val.as_ptr() as *const c_char, val.len());
+        }
+    }
+
+    pub fn pushbytes(&self, val: &[u8]) {
         unsafe {
             lua_pushlstring(self.lua, val.as_ptr() as *const c_char, val.len());
         }

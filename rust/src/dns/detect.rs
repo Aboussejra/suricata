@@ -29,14 +29,17 @@ use crate::detect::{
     SIGMATCH_INFO_MULTI_UINT, SIGMATCH_INFO_UINT16, SIGMATCH_INFO_UINT8,
 };
 use crate::direction::Direction;
+use crate::http2::http2::{HTTP2TxProgress, HTTP2TxType};
 use std::ffi::CStr;
 use std::os::raw::{c_int, c_void};
 use suricata_sys::sys::{
-    DetectEngineCtx, DetectEngineThreadCtx, Flow, SCDetectBufferSetActiveList,
-    SCDetectHelperBufferRegister, SCDetectHelperKeywordAliasRegister,
-    SCDetectHelperKeywordRegister, SCDetectHelperMultiBufferProgressMpmRegister,
-    SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList, SCSigTableAppLiteElmt, SigMatchCtx,
-    Signature,
+    AppProtoEnum, DetectEngineCtx, DetectEngineThreadCtx, Flow, SCDetectBufferSetActiveList,
+    SCDetectHelperBufferProgressRegister, SCDetectHelperBufferProgressRegisterSubState,
+    SCDetectHelperKeywordAliasRegister, SCDetectHelperKeywordRegister,
+    SCDetectHelperMultiBufferProgressMpmRegister,
+    SCDetectHelperMultiBufferProgressMpmRegisterSubState, SCDetectSignatureSetAppProto,
+    SCSigMatchAppendSMToList, SCSigTableAppLiteElmt, SigMatchCtx, Signature,
+    SIGMATCH_SUPPORT_FIREWALL,
 };
 
 /// Perform the DNS opcode match.
@@ -173,7 +176,9 @@ unsafe extern "C" fn dns_opcode_free(_de: *mut DetectEngineCtx, ctx: *mut c_void
     SCDetectU8Free(ctx);
 }
 
-unsafe extern "C" fn dns_rcode_parse(ustr: *const std::os::raw::c_char) -> *mut DetectUintData<u16> {
+unsafe extern "C" fn dns_rcode_parse(
+    ustr: *const std::os::raw::c_char,
+) -> *mut DetectUintData<u16> {
     let ft_name: &CStr = CStr::from_ptr(ustr); //unsafe
     if let Ok(s) = ft_name.to_str() {
         if let Some(ctx) = detect_parse_uint_enum::<u16, DNSRcode>(s) {
@@ -358,7 +363,7 @@ pub unsafe extern "C" fn SCDetectDNSRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("dns.answer.name"),
         desc: String::from("DNS answer name sticky buffer"),
-        url: String::from("/rules/dns-keywords.html#dns-answer-name"),
+        url: String::from("/rules/dns-keywords.html#dns-answers-rrname"),
         setup: dns_detect_answer_name_setup,
     };
     let _g_dns_answer_name_kw_id = helper_keyword_register_multi_buffer(&kw);
@@ -372,25 +377,46 @@ pub unsafe extern "C" fn SCDetectDNSRegister() {
         Some(dns_tx_get_answer_name),
         1, // response complete
     );
+    _ = SCDetectHelperMultiBufferProgressMpmRegisterSubState(
+        b"dns.answer.name\0".as_ptr() as *const libc::c_char,
+        b"dns answer name\0".as_ptr() as *const libc::c_char,
+        AppProtoEnum::ALPROTO_DOH2 as u16,
+        STREAM_TOSERVER | STREAM_TOCLIENT,
+        /* Register also in the TO_SERVER direction, even though this is not
+        normal, it could be provided as part of a request. */
+        Some(dns_tx_get_answer_name),
+        HTTP2TxType::HTTP2TxTypeStream as u8,
+        HTTP2TxProgress::HTTP2ProgClosed as u8,
+    );
+
     let kw = SCSigTableAppLiteElmt {
         name: b"dns.opcode\0".as_ptr() as *const libc::c_char,
         desc: b"Match the DNS header opcode flag.\0".as_ptr() as *const libc::c_char,
-        url: b"rules/dns-keywords.html#dns-opcode\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/dns-keywords.html#dns-opcode\0".as_ptr() as *const libc::c_char,
         AppLayerTxMatch: Some(dns_opcode_match),
         Setup: Some(dns_opcode_setup),
         Free: Some(dns_opcode_free),
-        flags: SIGMATCH_INFO_UINT8,
+        flags: SIGMATCH_INFO_UINT8 | SIGMATCH_SUPPORT_FIREWALL,
     };
     G_DNS_OPCODE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_DNS_OPCODE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_DNS_OPCODE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"dns.opcode\0".as_ptr() as *const libc::c_char,
         ALPROTO_DNS,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        1,
     );
+    _ = SCDetectHelperBufferProgressRegisterSubState(
+        b"dns.opcode\0".as_ptr() as *const libc::c_char,
+        AppProtoEnum::ALPROTO_DOH2 as u16,
+        STREAM_TOSERVER | STREAM_TOCLIENT,
+        HTTP2TxType::HTTP2TxTypeStream as u8,
+        HTTP2TxProgress::HTTP2ProgClosed as u8,
+    );
+
     let kw = SigTableElmtStickyBuffer {
         name: String::from("dns.query.name"),
         desc: String::from("DNS query name sticky buffer"),
-        url: String::from("/rules/dns-keywords.html#dns-query-name"),
+        url: String::from("/rules/dns-keywords.html#dns-queries-rrname"),
         setup: dns_detect_query_name_setup,
     };
     let _g_dns_query_name_kw_id = helper_keyword_register_multi_buffer(&kw);
@@ -404,36 +430,66 @@ pub unsafe extern "C" fn SCDetectDNSRegister() {
         Some(dns_tx_get_query_name),
         1, // request or response complete
     );
+    _ = SCDetectHelperMultiBufferProgressMpmRegisterSubState(
+        b"dns.query.name\0".as_ptr() as *const libc::c_char,
+        b"dns query name\0".as_ptr() as *const libc::c_char,
+        AppProtoEnum::ALPROTO_DOH2 as u16,
+        STREAM_TOSERVER | STREAM_TOCLIENT,
+        /* Register in both directions as the query is usually echoed back
+        in the response. */
+        Some(dns_tx_get_query_name),
+        HTTP2TxType::HTTP2TxTypeStream as u8,
+        HTTP2TxProgress::HTTP2ProgClosed as u8,
+    );
+
     let kw = SCSigTableAppLiteElmt {
         name: b"dns.rcode\0".as_ptr() as *const libc::c_char,
         desc: b"Match the DNS header rcode flag.\0".as_ptr() as *const libc::c_char,
-        url: b"rules/dns-keywords.html#dns-rcode\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/dns-keywords.html#dns-rcode\0".as_ptr() as *const libc::c_char,
         AppLayerTxMatch: Some(dns_rcode_match),
         Setup: Some(dns_rcode_setup),
         Free: Some(dns_rcode_free),
         flags: SIGMATCH_INFO_UINT16 | SIGMATCH_INFO_ENUM_UINT,
     };
     G_DNS_RCODE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_DNS_RCODE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_DNS_RCODE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"dns.rcode\0".as_ptr() as *const libc::c_char,
         ALPROTO_DNS,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        1,
     );
+    _ = SCDetectHelperBufferProgressRegisterSubState(
+        b"dns.rcode\0".as_ptr() as *const libc::c_char,
+        AppProtoEnum::ALPROTO_DOH2 as u16,
+        STREAM_TOSERVER | STREAM_TOCLIENT,
+        HTTP2TxType::HTTP2TxTypeStream as u8,
+        HTTP2TxProgress::HTTP2ProgClosed as u8,
+    );
+
     let kw = SCSigTableAppLiteElmt {
         name: b"dns.rrtype\0".as_ptr() as *const libc::c_char,
         desc: b"Match the DNS rrtype in message body.\0".as_ptr() as *const libc::c_char,
-        url: b"rules/dns-keywords.html#dns-rrtype\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/dns-keywords.html#dns-rrtype\0".as_ptr() as *const libc::c_char,
         AppLayerTxMatch: Some(dns_rrtype_match),
         Setup: Some(dns_rrtype_setup),
         Free: Some(dns_rrtype_free),
         flags: SIGMATCH_INFO_UINT16 | SIGMATCH_INFO_MULTI_UINT | SIGMATCH_INFO_ENUM_UINT,
     };
     G_DNS_RRTYPE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_DNS_RRTYPE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_DNS_RRTYPE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"dns.rrtype\0".as_ptr() as *const libc::c_char,
         ALPROTO_DNS,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        1,
     );
+    _ = SCDetectHelperBufferProgressRegisterSubState(
+        b"dns.rrtype\0".as_ptr() as *const libc::c_char,
+        AppProtoEnum::ALPROTO_DOH2 as u16,
+        STREAM_TOSERVER | STREAM_TOCLIENT,
+        HTTP2TxType::HTTP2TxTypeStream as u8,
+        HTTP2TxProgress::HTTP2ProgClosed as u8,
+    );
+
     let kw = SigTableElmtStickyBuffer {
         name: String::from("dns.query"),
         desc: String::from("sticky buffer to match DNS query-buffer"),
@@ -452,6 +508,15 @@ pub unsafe extern "C" fn SCDetectDNSRegister() {
         STREAM_TOSERVER,
         Some(dns_tx_get_query), // reuse, will be called only toserver
         1,                      // request complete
+    );
+    _ = SCDetectHelperMultiBufferProgressMpmRegisterSubState(
+        b"dns_query\0".as_ptr() as *const libc::c_char,
+        b"dns request query\0".as_ptr() as *const libc::c_char,
+        AppProtoEnum::ALPROTO_DOH2 as u16,
+        STREAM_TOSERVER,
+        Some(dns_tx_get_query),
+        HTTP2TxType::HTTP2TxTypeStream as u8,
+        HTTP2TxProgress::HTTP2ProgClosed as u8,
     );
 }
 

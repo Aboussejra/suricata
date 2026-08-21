@@ -569,9 +569,7 @@ static void SigInitStandardMpmFactoryContexts(DetectEngineCtx *de_ctx)
 /** \brief Pure-PCRE or bytetest rule */
 static bool RuleInspectsPayloadHasNoMpm(const Signature *s)
 {
-    if (s->init_data->mpm_sm == NULL && s->init_data->smlists[DETECT_SM_LIST_PMATCH] != NULL)
-        return true;
-    return false;
+    return s->init_data->mpm_sm == NULL && s->init_data->smlists[DETECT_SM_LIST_PMATCH] != NULL;
 }
 
 static int RuleGetMpmPatternSize(const Signature *s)
@@ -599,8 +597,15 @@ static bool RuleMpmIsNegated(const Signature *s)
     const DetectContentData *cd = (const DetectContentData *)s->init_data->mpm_sm->ctx;
     if (cd == NULL)
         return false;
-    return (cd->flags & DETECT_CONTENT_NEGATED) ? true : false;
+    return (cd->flags & DETECT_CONTENT_NEGATED) != 0;
 }
+
+typedef struct MpmStat {
+    uint32_t total;
+    uint32_t cnt;
+    uint32_t min;
+    uint32_t max;
+} MpmStat;
 
 static SCJsonBuilder *RulesGroupPrintSghStats(const DetectEngineCtx *de_ctx,
         const SigGroupHead *sgh, const int add_rules, const int add_mpm_stats)
@@ -620,13 +625,12 @@ static SCJsonBuilder *RulesGroupPrintSghStats(const DetectEngineCtx *de_ctx,
 
     int max_buffer_type_id = de_ctx->buffer_type_id;
 
-    struct {
-        uint32_t total;
-        uint32_t cnt;
-        uint32_t min;
-        uint32_t max;
-    } mpm_stats[max_buffer_type_id];
-    memset(mpm_stats, 0x00, sizeof(mpm_stats));
+    MpmStat *mpm_stats = NULL;
+    if (add_mpm_stats) {
+        mpm_stats = SCCalloc(max_buffer_type_id, sizeof(MpmStat));
+        if (mpm_stats == NULL)
+            return NULL;
+    }
 
     uint32_t alstats[g_alproto_max];
     memset(alstats, 0, g_alproto_max * sizeof(uint32_t));
@@ -636,12 +640,16 @@ static SCJsonBuilder *RulesGroupPrintSghStats(const DetectEngineCtx *de_ctx,
     memset(alproto_mpm_bufs, 0, sizeof(alproto_mpm_bufs));
 
     DEBUG_VALIDATE_BUG_ON(sgh->init == NULL);
-    if (sgh->init == NULL)
+    if (sgh->init == NULL) {
+        SCFree(mpm_stats);
         return NULL;
+    }
 
     SCJsonBuilder *js = SCJbNewObject();
-    if (unlikely(js == NULL))
+    if (unlikely(js == NULL)) {
+        SCFree(mpm_stats);
         return NULL;
+    }
 
     SCJbSetUint(js, "id", sgh->id);
 
@@ -652,7 +660,7 @@ static SCJsonBuilder *RulesGroupPrintSghStats(const DetectEngineCtx *de_ctx,
             continue;
 
         int any = 0;
-        if (s->proto.flags & DETECT_PROTO_ANY) {
+        if (s->proto == NULL || s->proto->flags & DETECT_PROTO_ANY) {
             any++;
         }
         if (s->flags & SIG_FLAG_DST_ANY) {
@@ -732,13 +740,14 @@ static SCJsonBuilder *RulesGroupPrintSghStats(const DetectEngineCtx *de_ctx,
                 mpms_max = w;
 
             BUG_ON(mpm_list >= max_buffer_type_id);
-            mpm_stats[mpm_list].total += w;
-            mpm_stats[mpm_list].cnt++;
-            if (mpm_stats[mpm_list].min == 0 || w < mpm_stats[mpm_list].min)
-                mpm_stats[mpm_list].min = w;
-            if (w > mpm_stats[mpm_list].max)
-                mpm_stats[mpm_list].max = w;
-
+            if (mpm_stats != NULL) {
+                mpm_stats[mpm_list].total += w;
+                mpm_stats[mpm_list].cnt++;
+                if (mpm_stats[mpm_list].min == 0 || w < mpm_stats[mpm_list].min)
+                    mpm_stats[mpm_list].min = w;
+                if (w > mpm_stats[mpm_list].max)
+                    mpm_stats[mpm_list].max = w;
+            }
             mpm_cnt++;
 
             if (w < 10) {
@@ -863,6 +872,7 @@ static SCJsonBuilder *RulesGroupPrintSghStats(const DetectEngineCtx *de_ctx,
 
     SCJbSetUint(js, "score", sgh->init->score);
     SCJbClose(js);
+    SCFree(mpm_stats);
 
     return js;
 }
@@ -972,7 +982,8 @@ static int RulesGroupByIPProto(DetectEngineCtx *de_ctx)
             if (p == IPPROTO_TCP || p == IPPROTO_UDP) {
                 continue;
             }
-            if (!(s->proto.proto[p / 8] & (1<<(p % 8)) || (s->proto.flags & DETECT_PROTO_ANY))) {
+
+            if (!DetectProtoContainsProto(&s->init_data->proto, p)) {
                 continue;
             }
 
@@ -1469,6 +1480,31 @@ static inline int CreatePortList(DetectEngineCtx *de_ctx, const uint8_t *unique_
     return 0;
 }
 
+static bool SigIsEthernet(const Signature *s)
+{
+    return ((s->init_data->proto.flags & DETECT_PROTO_ETHERNET));
+}
+
+static bool SigIsEthernetAddToIP(const Signature *s)
+{
+    /* ARP and IP are mutually exclusive, so don't add an ARP rule
+     * to IP groups. */
+    if (s->init_data->proto.flags & DETECT_PROTO_ARP) {
+        SCLogDebug("rule %u: ARP is not for IP", s->id);
+        return false;
+    }
+
+    /* all other Ethernet may be IP as well, so add to these groups. */
+    return true;
+}
+
+static bool SigIsEthernetAddToNonIP(const Signature *s)
+{
+    /* add all Ethernet sigs to the Non IP group as there isn't enough
+     * info to know for sure if they are looking for IP traffic or not. */
+    return (SigIsEthernet(s));
+}
+
 static DetectPort *RulesGroupByPorts(DetectEngineCtx *de_ctx, uint8_t ipproto, uint32_t direction)
 {
     /* step 1: create a hash of 'DetectPort' objects based on all the
@@ -1488,28 +1524,45 @@ static DetectPort *RulesGroupByPorts(DetectEngineCtx *de_ctx, uint8_t ipproto, u
         /* IP Only rules are handled separately */
         if (s->type == SIG_TYPE_IPONLY)
             goto next;
-        /* Protocol does not match the Signature protocol and is neither IP or pkthdr */
-        if (!(s->proto.proto[ipproto / 8] & (1<<(ipproto % 8)) || (s->proto.flags & DETECT_PROTO_ANY)))
-            goto next;
-        /* Direction does not match Signature direction */
-        if (direction == SIG_FLAG_TOSERVER) {
-            if (!(s->flags & SIG_FLAG_TOSERVER))
-                goto next;
-        } else if (direction == SIG_FLAG_TOCLIENT) {
-            if (!(s->flags & SIG_FLAG_TOCLIENT))
-                goto next;
-        }
 
-        /* see if we want to exclude directionless sigs that really care only for
-         * to_server syn scans/floods */
-        if ((direction == SIG_FLAG_TOCLIENT) && DetectFlagsSignatureNeedsSynOnlyPackets(s) &&
-                ((s->flags & (SIG_FLAG_TOSERVER | SIG_FLAG_TOCLIENT)) ==
-                        (SIG_FLAG_TOSERVER | SIG_FLAG_TOCLIENT)) &&
-                (!(s->dp->port == 0 && s->dp->port2 == 65535))) {
-            SCLogWarning("rule %u: SYN-only to port(s) %u:%u "
-                         "w/o direction specified, disabling for toclient direction",
-                    s->id, s->dp->port, s->dp->port2);
-            goto next;
+        if (SigIsEthernet(s)) {
+            if (!SigIsEthernetAddToIP(s)) {
+                SCLogDebug("rule %u: not for IP", s->id);
+                goto next;
+            }
+            SCLogDebug("rule %u: add ethernet rule to IP group", s->id);
+        } else {
+            /* Protocol does not match the Signature protocol and is non of IP, pkthdr */
+            if (!DetectProtoContainsProto(&s->init_data->proto, ipproto)) {
+                SCLogDebug("skip s:%u for proto:%u", s->id, ipproto);
+                goto next;
+            }
+            /* Direction does not match Signature direction */
+            if (direction == SIG_FLAG_TOSERVER) {
+                if (!(s->flags & SIG_FLAG_TOSERVER)) {
+                    SCLogDebug(
+                            "skip s:%u for proto:%u direction SIG_FLAG_TOSERVER", s->id, ipproto);
+                    goto next;
+                }
+            } else if (direction == SIG_FLAG_TOCLIENT) {
+                if (!(s->flags & SIG_FLAG_TOCLIENT)) {
+                    SCLogDebug(
+                            "skip s:%u for proto:%u direction SIG_FLAG_TOCLIENT", s->id, ipproto);
+                    goto next;
+                }
+            }
+
+            /* see if we want to exclude directionless sigs that really care only for
+             * to_server syn scans/floods */
+            if ((direction == SIG_FLAG_TOCLIENT) && DetectFlagsSignatureNeedsSynOnlyPackets(s) &&
+                    ((s->flags & (SIG_FLAG_TOSERVER | SIG_FLAG_TOCLIENT)) ==
+                            (SIG_FLAG_TOSERVER | SIG_FLAG_TOCLIENT)) &&
+                    (!(s->dp->port == 0 && s->dp->port2 == 65535))) {
+                SCLogWarning("rule %u: SYN-only to port(s) %u:%u "
+                             "w/o direction specified, disabling for toclient direction",
+                        s->id, s->dp->port, s->dp->port2);
+                goto next;
+            }
         }
 
         DetectPort *p = NULL;
@@ -1538,6 +1591,7 @@ static DetectPort *RulesGroupByPorts(DetectEngineCtx *de_ctx, uint8_t ipproto, u
                 size_unique_port_arr =
                         SetUniquePortPoints(tmp2, unique_port_points, size_unique_port_arr);
             }
+            SCLogDebug("s:%u added to group (proto:%u)", s->id, ipproto);
 
             p = p->next;
         }
@@ -1653,8 +1707,11 @@ void SignatureSetType(DetectEngineCtx *de_ctx, Signature *s)
         SCReturn;
     }
 
-    /* see if the sig is dp only */
-    if (SignatureIsPDOnly(de_ctx, s) == 1) {
+    if (s->init_data->proto.flags & DETECT_PROTO_ETHERNET) {
+        s->type = SIG_TYPE_PKT;
+
+        /* see if the sig is dp only */
+    } else if (SignatureIsPDOnly(de_ctx, s) == 1) {
         s->type = SIG_TYPE_PDONLY;
 
         /* see if the sig is ip only */
@@ -1787,7 +1844,7 @@ int SigPrepareStage1(DetectEngineCtx *de_ctx)
             if (copresent && colen == 1) {
                 SCLogDebug("signature %8u content maxlen 1", s->id);
                 for (int proto = 0; proto < 256; proto++) {
-                    if (s->proto.proto[(proto/8)] & (1<<(proto%8)))
+                    if (s->init_data->proto.proto[(proto / 8)] & (1 << (proto % 8)))
                         SCLogDebug("=> proto %" PRId32 "", proto);
                 }
             }
@@ -1857,6 +1914,12 @@ static void DetectEngineAddDecoderEventSig(DetectEngineCtx *de_ctx, Signature *s
     SigGroupHeadAppendSig(de_ctx, &de_ctx->decoder_event_sgh, s);
 }
 
+static void DetectEngineAddEthernetSig(DetectEngineCtx *de_ctx, Signature *s)
+{
+    SCLogDebug("adding signature %" PRIu32 " to the eth non ip sgh", s->id);
+    SigGroupHeadAppendSig(de_ctx, &de_ctx->eth_non_ip_sgh, s);
+}
+
 static void DetectEngineAddSigToPreStreamHook(DetectEngineCtx *de_ctx, Signature *s)
 {
     SCLogDebug("adding signature %" PRIu32 " to the pre_stream hook sgh", s->id);
@@ -1916,6 +1979,14 @@ int SigPrepareStage2(DetectEngineCtx *de_ctx)
                    s->init_data->hook.t.pkt.ph == SIGNATURE_HOOK_PKT_PRE_FLOW) {
             DetectEngineAddSigToPreFlowHook(de_ctx, s);
         }
+
+        /* add ethernet sigs and decoder events to the ethernet sgh */
+        if ((s->type == SIG_TYPE_PKT && SigIsEthernetAddToNonIP(s)) || s->type == SIG_TYPE_DEONLY ||
+                (s->init_data->proto.flags & DETECT_PROTO_L2_ANY)) {
+            // ethernet
+            SCLogDebug("rule: %u: add to non-IP", s->id);
+            DetectEngineAddEthernetSig(de_ctx, s);
+        }
     }
 
     IPOnlyPrepare(de_ctx);
@@ -1963,6 +2034,16 @@ static void DetectEngineBuildPreFlowHookSghs(DetectEngineCtx *de_ctx)
     }
 }
 
+static void DetectEngineBuildEthernetNonIPSgh(DetectEngineCtx *de_ctx)
+{
+    if (de_ctx->eth_non_ip_sgh != NULL) {
+        const uint32_t max_idx = DetectEngineGetMaxSigId(de_ctx);
+        SigGroupHeadSetSigCnt(de_ctx->eth_non_ip_sgh, max_idx);
+        SigGroupHeadBuildMatchArray(de_ctx, de_ctx->eth_non_ip_sgh, max_idx);
+        PrefilterSetupRuleGroup(de_ctx, de_ctx->eth_non_ip_sgh);
+    }
+}
+
 int SigPrepareStage3(DetectEngineCtx *de_ctx)
 {
     /* prepare the decoder event sgh */
@@ -1974,6 +2055,9 @@ int SigPrepareStage3(DetectEngineCtx *de_ctx)
     /* pre_stream hook sghs */
     DetectEngineBuildPreStreamHookSghs(de_ctx);
 
+    /* Ethernet Non IP */
+    DetectEngineBuildEthernetNonIPSgh(de_ctx);
+
     return 0;
 }
 
@@ -1983,6 +2067,8 @@ int SigAddressCleanupStage1(DetectEngineCtx *de_ctx)
 
     SCLogDebug("cleaning up signature grouping structure...");
 
+    if (de_ctx->eth_non_ip_sgh)
+        SigGroupHeadFree(de_ctx, de_ctx->eth_non_ip_sgh);
     if (de_ctx->decoder_event_sgh)
         SigGroupHeadFree(de_ctx, de_ctx->decoder_event_sgh);
     de_ctx->decoder_event_sgh = NULL;
@@ -2135,8 +2221,10 @@ static int SigMatchPrepare(DetectEngineCtx *de_ctx)
 
     Signature *s = de_ctx->sig_list;
     for (; s != NULL; s = s->next) {
+        SCLogDebug("s:%u: prepare", s->id);
         /* set up inspect engines */
-        DetectEngineAppInspectionEngine2Signature(de_ctx, s);
+        if (DetectEngineAppInspectionEngine2Signature(de_ctx, s) != 0)
+            SCReturnInt(-1);
 
         /* built-ins */
         for (int type = 0; type < DETECT_SM_LIST_MAX; type++) {

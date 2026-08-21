@@ -40,7 +40,7 @@
 #include "util-debug.h"
 
 #define KEYWORD_NAME "ftp.completion_code"
-#define KEYWORD_DOC  "ftp-keywords.html#ftp-completion_code"
+#define KEYWORD_DOC  "ftp-keywords.html#ftp-completion-code"
 #define BUFFER_NAME  "ftp.completion_code"
 #define BUFFER_DESC  "ftp completion code"
 
@@ -93,10 +93,11 @@ void DetectFtpCompletionCodeRegister(void)
     sigmatch_table[DETECT_FTP_COMPLETION_CODE].url = "/rules/" KEYWORD_DOC;
     sigmatch_table[DETECT_FTP_COMPLETION_CODE].Setup = DetectFtpCompletionCodeSetup;
     sigmatch_table[DETECT_FTP_COMPLETION_CODE].flags =
-            SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER | SIGMATCH_INFO_MULTI_BUFFER;
+            SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER | SIGMATCH_INFO_MULTI_BUFFER |
+            SIGMATCH_SUPPORT_FIREWALL;
 
-    DetectAppLayerMultiRegister(
-            BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOCLIENT, 0, DetectFTPCompletionCodeGetData, 2);
+    DetectAppLayerMultiRegister(BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOCLIENT, FTP_STATE_FINISHED,
+            DetectFTPCompletionCodeGetData, 2);
 
     DetectBufferTypeSetDescriptionByName(BUFFER_NAME, BUFFER_DESC);
 

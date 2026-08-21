@@ -22,6 +22,13 @@ packet with ethernet header.
 If ``suricata-version`` is set to yes, then Suricata version, with its git
 revision if available, will be added to events as ``suricata_version``.
 
+If ``ipv6-compress`` is set to yes, then IPv6 addresses will be displayed in their compressed form
+according to RFC-5952. The default is ``no`` (display IPv6 addresses in their expanded form).
+Here's an example of an IPv6 address displayed with its compress value::
+
+  ``fe80:0000:0000:0000:020c:29ff:faf2:ab42``
+  ``fe80::20c:29ff:faf2:ab42``
+
 Output Buffering
 ~~~~~~~~~~~~~~~~
 
@@ -32,9 +39,9 @@ may be held in memory and written a short time later opening the possibility -- 
 loss.
 
 Hence, a heartbeat mechanism is introduced to limit the amount of time buffered data may exist before being
-flushed.  Control is provided to instruct Suricata's detection threads to flush their EVE output. With default
+flushed.  A heartbeat thread periodically flushes all active EVE log files directly. With default
 values, there is no change in output buffering and flushing behavior. ``output-flush-interval`` controls
-how often Suricata's detect threads will flush output in a heartbeat fashion. A value of ``0`` means
+how often Suricata will flush EVE output in a heartbeat fashion. A value of ``0`` means
 "never"; non-zero values must be in ``[1-60]`` seconds.
 
 Flushing should be considered when ``outputs.buffer-size`` is greater than 0 to limit the amount and

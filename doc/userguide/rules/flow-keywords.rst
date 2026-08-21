@@ -31,9 +31,6 @@ flowbits: set, name
 flowbits: isset, name
   Can be used in the rule to make sure it generates an alert when the
   rule matches and the condition is set in the flow.
-flowbits: toggle, name
-  Reverses the present setting. So for example if a condition is set,
-  it will be unset and vice-versa.
 flowbits: unset, name
   Can be used to unset the condition in the flow.
 flowbits: isnotset, name
@@ -315,9 +312,9 @@ The time can be matched exactly, or compared using the _op_ setting::
  flow.age:<3   # smaller than 3 seconds
  flow.age:>=2  # greater or equal than 2 seconds
 
-Signature example::
+.. container:: example-rule
 
- alert tcp any any -> any any (msg:"Flow longer than one hour"; flow.age:>3600; flowbits: isnotset, onehourflow; flowbits: onehourflow, name; sid:1; rev:1;)
+ alert tcp any any -> any any (msg:"Flow longer than one hour"; flow.age:>3600; flowbits: isnotset, onehourflow; flowbits: set, onehourflow; sid:1; rev:1;)
 
 In this example, we combine `flow.age` and `flowbits` to get an alert on the first packet after the flow's age is older than one hour.
 
@@ -348,7 +345,7 @@ The number of packets can be matched exactly, or compared using the _op_ setting
  flow.pkts:toserver,<3   # smaller than 3
  flow.pkts:either,>=2  # greater than or equal to 2
 
-Signature example::
+.. container:: example-rule
 
  alert ip any any -> any any (msg:"Flow has 20 packets in toclient dir"; flow.pkts:toclient,20; sid:1;)
 
@@ -383,7 +380,7 @@ The number of bytes can be matched exactly, or compared using the _op_ setting::
  flow.bytes:toserver,<3   # smaller than 3
  flow.bytes:either,>=2  # greater than or equal to 2
 
-Signature example::
+.. container:: example-rule
 
  alert ip any any -> any any (msg:"Flow has less than 2000 bytes in toserver dir"; flow.bytes:toserver,<2000; sid:1;)
 
@@ -413,7 +410,7 @@ Syntax::
 
  flow.elephant:<direction>
 
-Signature example::
+.. container:: example-rule
 
  alert tcp any any -> any any (msg:"Flow is elephant in toserver dir"; flow.elephant:toserver; sid:1;)
 

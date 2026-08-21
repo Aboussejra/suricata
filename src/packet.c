@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2022 Open Information Security Foundation
+/* Copyright (C) 2007-2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -70,11 +70,16 @@ uint8_t PacketGetAction(const Packet *p)
 /**
  *  \brief Initialize a packet structure for use.
  */
-void PacketInit(Packet *p)
+bool PacketInit(Packet *p)
 {
     SCSpinInit(&p->persistent.tunnel_lock, 0);
     p->alerts.alerts = PacketAlertCreate();
-    p->livedev = NULL;
+    if (unlikely(p->alerts.alerts == NULL)) {
+        return false;
+    }
+    p->livedev_id = 0;
+    p->livedev_dst_id = 0;
+    return true;
 }
 
 void PacketReleaseRefs(Packet *p)
@@ -135,6 +140,7 @@ void PacketReinit(Packet *p)
 #define RESET_PKT_LEN(p) ((p)->pktlen = 0)
     RESET_PKT_LEN(p);
     p->alerts.discarded = 0;
+    p->alerts.firewall_discarded = 0;
     p->alerts.suppressed = 0;
     p->alerts.drop.action = 0;
     if (p->alerts.cnt > 0) {
@@ -150,7 +156,8 @@ void PacketReinit(Packet *p)
     p->prev = NULL;
     p->tunnel_verdicted = false;
     p->root = NULL;
-    p->livedev = NULL;
+    p->livedev_id = 0;
+    p->livedev_dst_id = 0;
     PACKET_PROFILING_RESET(p);
     p->tenant_id = 0;
     p->nb_decoded_layers = 0;
@@ -185,7 +192,7 @@ inline void SCPacketSetReleasePacket(Packet *p, void (*ReleasePacket)(Packet *p)
 
 inline void SCPacketSetLiveDevice(Packet *p, LiveDevice *device)
 {
-    p->livedev = device;
+    p->livedev_id = LiveDeviceGetId(device);
 }
 
 inline void SCPacketSetDatalink(Packet *p, int datalink)

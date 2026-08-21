@@ -22,24 +22,24 @@
 #ifndef SURICATA_THREAD_STORAGE_H
 #define SURICATA_THREAD_STORAGE_H
 
+#ifndef SURICATA_BINDGEN_H
 #include "threadvars.h"
+#endif
 
-typedef struct ThreadStorageId {
+typedef struct SCThreadStorageId {
     int id;
-} ThreadStorageId;
+} SCThreadStorageId;
 
-unsigned int ThreadStorageSize(void);
+unsigned int SCThreadStorageSize(void);
 
-void *ThreadGetStorageById(const ThreadVars *tv, ThreadStorageId id);
-int ThreadSetStorageById(ThreadVars *tv, ThreadStorageId id, void *ptr);
-void *ThreadAllocStorageById(ThreadVars *tv, ThreadStorageId id);
+void *SCThreadGetStorageById(const ThreadVars *tv, SCThreadStorageId id);
+int SCThreadSetStorageById(ThreadVars *tv, SCThreadStorageId id, void *ptr);
 
-void ThreadFreeStorageById(ThreadVars *tv, ThreadStorageId id);
-void ThreadFreeStorage(ThreadVars *tv);
+void SCThreadFreeStorageById(ThreadVars *tv, SCThreadStorageId id);
+void SCThreadFreeStorage(ThreadVars *tv);
 
-void RegisterThreadStorageTests(void);
+void SCRegisterThreadStorageTests(void);
 
-ThreadStorageId ThreadStorageRegister(const char *name, const unsigned int size,
-        void *(*Alloc)(unsigned int), void (*Free)(void *));
+SCThreadStorageId SCThreadStorageRegister(const char *name, void (*Free)(void *));
 
 #endif /* SURICATA_THREAD_STORAGE_H */

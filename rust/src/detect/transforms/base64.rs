@@ -99,7 +99,8 @@ fn parse_transform_base64(
     let (_, values) = nom8::multi::separated_list1(
         tag(","),
         preceded(multispace0, nom8::bytes::complete::is_not(",")),
-    ).parse(input)?;
+    )
+    .parse(input)?;
 
     // Too many options?
     if values.len() > DETECT_TRANSFORM_BASE64_MAX_PARAM_COUNT {
@@ -224,7 +225,7 @@ unsafe extern "C" fn base64_setup(
     return r;
 }
 
-unsafe extern "C" fn base64_id(data: *mut *const u8, length: *mut u32, ctx: *mut c_void) {
+unsafe extern "C" fn base64_id(data: *mut *const u8, length: *mut u32, ctx: *const c_void) {
     if data.is_null() || length.is_null() || ctx.is_null() {
         return;
     }
@@ -237,7 +238,7 @@ unsafe extern "C" fn base64_id(data: *mut *const u8, length: *mut u32, ctx: *mut
 }
 
 unsafe extern "C" fn base64_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, ctx: *const c_void,
 ) {
     let input = (*buffer).inspect;
     let input_len = (*buffer).inspect_len;
@@ -280,7 +281,7 @@ pub unsafe extern "C" fn DetectTransformFromBase64DecodeRegister() {
     let kw = SCTransformTableElmt {
         name: b"from_base64\0".as_ptr() as *const libc::c_char,
         desc: b"convert the base64 decode of the buffer\0".as_ptr() as *const libc::c_char,
-        url: b"/rules/transforms.html#from_base64\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/transforms.html#from-base64\0".as_ptr() as *const libc::c_char,
         Setup: Some(base64_setup),
         flags: SIGMATCH_OPTIONAL_OPT,
         Transform: Some(base64_transform),

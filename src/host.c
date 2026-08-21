@@ -153,8 +153,8 @@ void HostClearMemory(Host *h)
         SRepFreeHostData(h);
     }
 
-    if (HostStorageSize() > 0)
-        HostFreeStorage(h);
+    if (SCHostStorageSize() > 0)
+        SCHostFreeStorage(h);
 
     BUG_ON(SC_ATOMIC_GET(h->use_cnt) > 0);
 }
@@ -168,9 +168,9 @@ void HostClearMemory(Host *h)
 void HostInitConfig(bool quiet)
 {
     SCLogDebug("initializing host engine...");
-    if (HostStorageSize() > 0) {
-        DEBUG_VALIDATE_BUG_ON(sizeof(Host) + HostStorageSize() > UINT16_MAX);
-        g_host_size = (uint16_t)(sizeof(Host) + HostStorageSize());
+    if (SCHostStorageSize() > 0) {
+        DEBUG_VALIDATE_BUG_ON(sizeof(Host) + SCHostStorageSize() > UINT16_MAX);
+        g_host_size = (uint16_t)(sizeof(Host) + SCHostStorageSize());
     }
 
     memset(&host_config,  0, sizeof(host_config));
@@ -192,7 +192,7 @@ void HostInitConfig(bool quiet)
     uint32_t configval = 0;
 
     /** set config values for memcap, prealloc and hash_size */
-    if ((SCConfGet("host.memcap", &conf_val)) == 1) {
+    if ((SCConfGetNonNull("host.memcap", &conf_val)) == 1) {
         uint64_t host_memcap = 0;
         if (ParseSizeStringU64(conf_val, &host_memcap) < 0) {
             SCLogError("Error parsing host.memcap "
@@ -203,14 +203,14 @@ void HostInitConfig(bool quiet)
             SC_ATOMIC_SET(host_config.memcap, host_memcap);
         }
     }
-    if ((SCConfGet("host.hash-size", &conf_val)) == 1) {
+    if ((SCConfGetNonNull("host.hash-size", &conf_val)) == 1) {
         if (StringParseUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
             host_config.hash_size = configval;
         }
     }
 
-    if ((SCConfGet("host.prealloc", &conf_val)) == 1) {
+    if ((SCConfGetNonNull("host.prealloc", &conf_val)) == 1) {
         if (StringParseUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
             host_config.prealloc = configval;
@@ -339,7 +339,7 @@ void HostCleanup(void)
             while (h) {
                 if ((SC_ATOMIC_GET(h->use_cnt) > 0) && (h->iprep != NULL)) {
                     /* iprep is attached to host only clear local storage */
-                    HostFreeStorage(h);
+                    SCHostFreeStorage(h);
                     h = h->hnext;
                 } else {
                     Host *n = h->hnext;
@@ -716,5 +716,5 @@ static Host *HostGetUsedHost(void)
 
 void HostRegisterUnittests(void)
 {
-    RegisterHostStorageTests();
+    SCRegisterHostStorageTests();
 }

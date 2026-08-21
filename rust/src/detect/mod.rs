@@ -36,13 +36,7 @@ pub mod uint;
 pub mod uri;
 pub mod vlan;
 
-use std::ffi::CString;
-use std::os::raw::c_int;
-
-use suricata_sys::sys::{
-    DetectEngineCtx, SCDetectHelperKeywordRegister, SCDetectHelperKeywordSetCleanCString,
-    SCSigTableAppLiteElmt, Signature,
-};
+use std::ffi::{c_void, CString};
 
 /// EnumString trait that will be implemented on enums that
 /// derive StringEnum.
@@ -64,52 +58,10 @@ pub trait EnumString<T> {
         Self: Sized;
 }
 
-/// Rust app-layer light version of SigTableElmt for simple sticky buffer
-pub struct SigTableElmtStickyBuffer {
-    /// keyword name
-    pub name: String,
-    /// keyword description
-    pub desc: String,
-    /// keyword documentation url
-    pub url: String,
-    /// function callback to parse and setup keyword in rule
-    pub setup: unsafe extern "C" fn(
-        de: *mut DetectEngineCtx,
-        s: *mut Signature,
-        raw: *const std::os::raw::c_char,
-    ) -> c_int,
-}
-
-fn helper_keyword_register_buffer_flags(kw: &SigTableElmtStickyBuffer, flags: u32) -> u16 {
-    let name = CString::new(kw.name.as_bytes()).unwrap().into_raw();
-    let desc = CString::new(kw.desc.as_bytes()).unwrap().into_raw();
-    let url = CString::new(kw.url.as_bytes()).unwrap().into_raw();
-    let st = SCSigTableAppLiteElmt {
-        name,
-        desc,
-        url,
-        Setup: Some(kw.setup),
-        flags,
-        AppLayerTxMatch: None,
-        Free: None,
-    };
-    unsafe {
-        let r = SCDetectHelperKeywordRegister(&st);
-        SCDetectHelperKeywordSetCleanCString(r);
-        return r;
-    }
-}
-
-pub fn helper_keyword_register_multi_buffer(kw: &SigTableElmtStickyBuffer) -> u16 {
-    return helper_keyword_register_buffer_flags(
-        kw,
-        SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER | SIGMATCH_INFO_MULTI_BUFFER,
-    );
-}
-
-pub fn helper_keyword_register_sticky_buffer(kw: &SigTableElmtStickyBuffer) -> u16 {
-    return helper_keyword_register_buffer_flags(kw, SIGMATCH_NOOPT | SIGMATCH_INFO_STICKY_BUFFER);
-}
+pub use suricata_ffi::detect::{
+    helper_keyword_register_multi_buffer, helper_keyword_register_sticky_buffer,
+    SigTableElmtStickyBuffer,
+};
 
 #[repr(C)]
 #[allow(non_snake_case)]
@@ -127,22 +79,33 @@ pub struct SCSigTableNamesElmt {
 pub unsafe extern "C" fn SCDetectSigMatchNamesFree(kw: &mut SCSigTableNamesElmt) {
     let _ = CString::from_raw(kw.name);
     let _ = CString::from_raw(kw.desc);
-    let _ = CString::from_raw(kw.url);
+    if !kw.url.is_null() {
+        let _ = CString::from_raw(kw.url);
+    }
 }
 
-// TODO bindgen these
-pub const SIGMATCH_NOOPT: u32 = 1; // BIT_U16(0) in detect.h
-pub(crate) const SIGMATCH_OPTIONAL_OPT: u32 = 0x10; // BIT_U16(4) in detect.h
-pub(crate) const SIGMATCH_QUOTES_MANDATORY: u32 = 0x40; // BIT_U16(6) in detect.h
-pub const SIGMATCH_INFO_STICKY_BUFFER: u32 = 0x200; // BIT_U16(9)
-pub const SIGMATCH_INFO_MULTI_BUFFER: u32 = 0x4000; // BIT_U16(14)
-pub const SIGMATCH_INFO_UINT8: u32 = 0x8000; // BIT_U32(15)
-pub const SIGMATCH_INFO_UINT16: u32 = 0x10000; // BIT_U32(16)
-pub const SIGMATCH_INFO_UINT32: u32 = 0x20000; // BIT_U32(17)
-pub const SIGMATCH_INFO_UINT64: u32 = 0x40000; // BIT_U32(18)
-pub const SIGMATCH_INFO_MULTI_UINT: u32 = 0x80000; // BIT_U32(19)
-pub const SIGMATCH_INFO_ENUM_UINT: u32 = 0x100000; // BIT_U32(20)
-pub const SIGMATCH_INFO_BITFLAGS_UINT: u32 = 0x200000; // BIT_U32(21)
+pub use suricata_sys::sys::{
+    SIGMATCH_INFO_BITFLAGS_UINT, SIGMATCH_INFO_ENUM_UINT, SIGMATCH_INFO_MULTI_BUFFER,
+    SIGMATCH_INFO_MULTI_UINT, SIGMATCH_INFO_STICKY_BUFFER, SIGMATCH_INFO_UINT16,
+    SIGMATCH_INFO_UINT32, SIGMATCH_INFO_UINT64, SIGMATCH_INFO_UINT8, SIGMATCH_NOOPT,
+    SIGMATCH_OPTIONAL_OPT, SIGMATCH_QUOTES_MANDATORY, SIGMATCH_SUPPORT_FIREWALL,
+};
+
+#[derive(Default)]
+pub(crate) struct DetectThreadBuf {
+    pub data: Vec<u8>,
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn SCDetectThreadBufDataInit(_cfg: *mut c_void) -> *mut c_void {
+    let boxed = Box::new(DetectThreadBuf::default());
+    return Box::into_raw(boxed) as *mut c_void;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn SCDetectThreadBufDataFree(ctx: *mut c_void) {
+    std::mem::drop(Box::from_raw(ctx as *mut DetectThreadBuf));
+}
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

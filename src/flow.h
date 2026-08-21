@@ -25,7 +25,7 @@
 #define SURICATA_FLOW_H
 
 /* forward declaration for macset include */
-typedef struct FlowStorageId FlowStorageId;
+typedef struct SCFlowStorageId SCFlowStorageId;
 
 #include "decode.h"
 #include "util-time.h"
@@ -35,6 +35,7 @@ typedef struct FlowStorageId FlowStorageId;
 #include "util-optimize.h"
 #include "util-validate.h"
 #include "app-layer-protos.h"
+#include "flow-bindgen.h"
 
 /* Part of the flow structure, so we declare it here.
  * The actual declaration is in app-layer-parser.c */
@@ -121,6 +122,11 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 /** next packet in toserver direction will act on updated app-layer state */
 #define FLOW_TS_APP_UPDATE_NEXT BIT_U64(31)
 
+/** Flow action issued by firewall */
+#define FLOW_ACTION_BY_FIREWALL BIT_U64(32)
+/** Flow action issued by exception policy */
+#define FLOW_ACTION_BY_EXCEPTION_POLICY BIT_U64(33)
+
 /* File flags */
 
 #define FLOWFILE_INIT                   0
@@ -130,8 +136,9 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 #define FLOWFILE_NO_MAGIC_TC            BIT_U16(1)
 
 /** even if the flow has files, don't store 'm */
-#define FLOWFILE_NO_STORE_TS            BIT_U16(2)
-#define FLOWFILE_NO_STORE_TC            BIT_U16(3)
+// defined in rust
+// #define FLOWFILE_NO_STORE_TS            BIT_U16(2)
+// #define FLOWFILE_NO_STORE_TC            BIT_U16(3)
 /** no md5 on files in this flow */
 #define FLOWFILE_NO_MD5_TS              BIT_U16(4)
 #define FLOWFILE_NO_MD5_TC              BIT_U16(5)
@@ -147,8 +154,9 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 // vacancy(2)
 
 /** store files in the flow */
-#define FLOWFILE_STORE_TS BIT_U16(12)
-#define FLOWFILE_STORE_TC BIT_U16(13)
+// defined in rust
+// #define FLOWFILE_STORE_TS BIT_U16(12)
+// #define FLOWFILE_STORE_TC BIT_U16(13)
 
 #define FLOWFILE_NONE_TS                                                                           \
     (FLOWFILE_NO_MAGIC_TS | FLOWFILE_NO_STORE_TS | FLOWFILE_NO_MD5_TS | FLOWFILE_NO_SHA1_TS |      \
@@ -389,7 +397,7 @@ typedef struct Flow_
     uint32_t flow_hash;
 
     /** Incoming interface */
-    struct LiveDevice_ *livedev;
+    uint16_t livedev_id;
 
     struct Flow_ *next; /* (hash) list next */
 
@@ -572,16 +580,10 @@ uint64_t FlowGetMemcap(void);
 uint64_t FlowGetMemuse(void);
 enum ExceptionPolicy FlowGetMemcapExceptionPolicy(void);
 
-FlowStorageId GetFlowBypassInfoID(void);
+SCFlowStorageId GetFlowBypassInfoID(void);
 void RegisterFlowBypassInfo(void);
 
 /** ----- Inline functions ----- */
-
-static inline AppProto FlowGetAppProtocol(const Flow *f)
-{
-    return f->alproto;
-}
-
 static inline void *FlowGetAppState(const Flow *f)
 {
     return f->alstate;
@@ -648,7 +650,6 @@ static inline bool FlowIsBypassed(const Flow *f)
 
 int FlowClearMemory(Flow *,uint8_t );
 
-AppProto FlowGetAppProtocol(const Flow *f);
 void *FlowGetAppState(const Flow *f);
 uint8_t FlowGetDisruptionFlags(const Flow *f, uint8_t flags);
 

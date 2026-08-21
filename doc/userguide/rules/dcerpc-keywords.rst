@@ -55,6 +55,10 @@ Examples::
   dcerpc.opnum:12,18-24,5;
   dcerpc.opnum:12-14,12,121,62-78;
 
+.. note:: earlier versions of the documentation incorrectly stated that greater than, less than, etc. notation was supported. This was added in suricata 9, see ticket `#8179 <https://redmine.openinfosecfoundation.org/issues/8179>`_).
+
+dcerpc.opnum can since suricata 9 use an :ref:`unsigned 16-bits integer <rules-integer-keywords>`.
+
 dcerpc.stub_data
 ----------------
 

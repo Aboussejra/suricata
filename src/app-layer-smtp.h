@@ -39,6 +39,7 @@ enum {
     SMTP_DECODER_EVENT_MAX_REPLY_LINE_LEN_EXCEEDED,
     SMTP_DECODER_EVENT_INVALID_PIPELINED_SEQUENCE,
     SMTP_DECODER_EVENT_BDAT_CHUNK_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_INVALID_BDAT,
     SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE,
     SMTP_DECODER_EVENT_TLS_REJECTED,
     SMTP_DECODER_EVENT_DATA_COMMAND_REJECTED,
@@ -70,14 +71,28 @@ typedef struct SMTPString_ {
     TAILQ_ENTRY(SMTPString_) next;
 } SMTPString;
 
+enum SMTPRequestProgress {
+    SMTP_REQUEST_STARTED = 0,
+    SMTP_REQUEST_DATA = 1,
+    SMTP_REQUEST_COMPLETE = 2,
+};
+
+enum SMTPResponseProgress {
+    SMTP_RESPONSE_STARTED = 0,
+    SMTP_RESPONSE_DATA = 1,
+    SMTP_RESPONSE_COMPLETE = 2,
+};
+
 typedef struct SMTPTransaction_ {
     /** id of this tx, starting at 0 */
     uint64_t tx_id;
 
     AppLayerTxData tx_data;
 
-    /** the tx is complete and can be logged and cleaned */
-    bool done;
+    /** to-server firewall progress state. */
+    uint8_t progress_ts;
+    /** to-client firewall progress state. */
+    uint8_t progress_tc;
     /** the tx has seen a DATA command */
     // another DATA command within the same context
     // will trigger an app-layer event.
@@ -139,6 +154,8 @@ typedef struct SMTPState_ {
      * stored command in the buffer to match the reply(ies) with the command */
     /** the command buffer */
     uint8_t *cmds;
+    /** tx id for each stored command */
+    uint64_t *cmds_tx_ids;
     /** the buffer length */
     uint16_t cmds_buffer_len;
     /** no of commands stored in the above buffer */

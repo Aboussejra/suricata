@@ -34,7 +34,7 @@ use suricata_sys::sys::{
 pub const REQUEST_FLOOD: usize = 500; // Default unreplied Modbus requests are considered a flood
 pub const MODBUS_PARSER: sawp_modbus::Modbus = sawp_modbus::Modbus { probe_strict: true };
 
-static mut ALPROTO_MODBUS: AppProto = ALPROTO_UNKNOWN;
+pub(super) static mut ALPROTO_MODBUS: AppProto = ALPROTO_UNKNOWN;
 
 #[derive(AppLayerEvent)]
 enum ModbusEvent {
@@ -184,9 +184,7 @@ impl ModbusState {
         }
     }
 
-    pub fn parse(
-        &mut self, flow: *mut Flow, input: &[u8], direction: Direction,
-    ) -> AppLayerResult {
+    pub fn parse(&mut self, flow: *mut Flow, input: &[u8], direction: Direction) -> AppLayerResult {
         let mut rest = input;
         while !rest.is_empty() {
             match MODBUS_PARSER.parse(rest, direction.clone()) {
@@ -1067,7 +1065,11 @@ mod tests {
         let mut state = ModbusState::new();
         assert_eq!(
             AppLayerResult::ok(),
-            state.parse(std::ptr::null_mut(), RD_WR_MULT_REG_REQ, Direction::ToServer)
+            state.parse(
+                std::ptr::null_mut(),
+                RD_WR_MULT_REG_REQ,
+                Direction::ToServer
+            )
         );
         assert_eq!(state.transactions.len(), 1);
 
@@ -1091,7 +1093,11 @@ mod tests {
 
         assert_eq!(
             AppLayerResult::ok(),
-            state.parse(std::ptr::null_mut(), RD_WR_MULT_REG_RESP, Direction::ToClient)
+            state.parse(
+                std::ptr::null_mut(),
+                RD_WR_MULT_REG_RESP,
+                Direction::ToClient
+            )
         );
         assert_eq!(state.transactions.len(), 1);
 
@@ -1417,7 +1423,11 @@ mod tests {
 
         assert_eq!(
             AppLayerResult::ok(),
-            state.parse(std::ptr::null_mut(), WR_SINGLE_REG_RESP, Direction::ToClient)
+            state.parse(
+                std::ptr::null_mut(),
+                WR_SINGLE_REG_RESP,
+                Direction::ToClient
+            )
         );
         assert_eq!(state.transactions.len(), 1);
 
@@ -1492,7 +1502,11 @@ mod tests {
 
         assert_eq!(
             AppLayerResult::ok(),
-            state.parse(std::ptr::null_mut(), WR_SINGLE_REG_RESP, Direction::ToClient)
+            state.parse(
+                std::ptr::null_mut(),
+                WR_SINGLE_REG_RESP,
+                Direction::ToClient
+            )
         );
         assert_eq!(state.transactions.len(), 1);
 

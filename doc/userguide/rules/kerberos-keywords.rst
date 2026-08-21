@@ -35,7 +35,8 @@ Signature examples::
 krb5_cname
 ----------
 
-Kerberos client name, provided in the ticket (for AS-REQ and TGS-REQ messages).
+Kerberos client name, provided in the ticket (for AS-REP and TGS-REP messages)
+or in the error message.
 
 If the client name from the Kerberos message is composed of several parts, the
 name is compared to each part and the match will succeed if any is identical.
@@ -46,7 +47,7 @@ Syntax::
 
  krb5_cname; content:"name";
 
-Signature example::
+.. container:: example-rule
 
  alert krb5 any any -> any any (msg:"Kerberos 5 des server name"; krb5_cname; content:"des"; sid:4; rev:1;)
 
@@ -59,7 +60,7 @@ Signature example::
 krb5_sname
 ----------
 
-Kerberos server name, provided in the ticket (for AS-REQ and TGS-REQ messages)
+Kerberos server name, provided in the ticket (for AS-REP and TGS-REP messages)
 or in the error message.
 
 If the server name from the Kerberos message is composed of several parts, the
@@ -71,7 +72,7 @@ Syntax::
 
  krb5_sname; content:"name";
 
-Signature example::
+.. container:: example-rule
 
  alert krb5 any any -> any any (msg:"Kerberos 5 krbtgt server name"; krb5_sname; content:"krbtgt"; sid:5; rev:1;)
 
@@ -88,11 +89,13 @@ Kerberos error code (integer). This field is matched in Kerberos error messages 
 
 For a list of error codes, refer to RFC4120 section 7.5.9.
 
+krb5_err_code uses :ref:`unsigned 32-bit integer <rules-integer-keywords>`.
+
 Syntax::
 
  krb5_err_code:<number>
 
-Signature example::
+.. container:: example-rule
 
  alert krb5 any any -> any any (msg:"Kerberos 5 error C_PRINCIPAL_UNKNOWN"; krb5_err_code:6; sid:6; rev:1;)
 
@@ -107,7 +110,7 @@ Syntax::
 
  app-layer-event:krb5.weak_encryption
 
-Signature example::
+.. container:: example-rule
 
  alert krb5 any any -> any any (msg:"SURICATA Kerberos 5 weak encryption parameters"; flow:to_client; app-layer-event:krb5.weak_encryption; classtype:protocol-command-decode; sid:2226001; rev:1;)
 
@@ -120,7 +123,7 @@ Syntax::
 
  app-layer-event:krb5.malformed_data
 
-Signature example::
+.. container:: example-rule
 
  alert krb5 any any -> any any (msg:"SURICATA Kerberos 5 malformed request data"; flow:to_server; app-layer-event:krb5.malformed_data; classtype:protocol-command-decode; sid:2226000; rev:1;)
 
@@ -135,8 +138,14 @@ Syntax::
 
  krb5.ticket_encryption: (!)"weak" or (space or comma)-separated list of integer or string values for an encryption type
 
-Signature example::
+.. container:: example-rule
 
  alert krb5 any any -> any any (krb5.ticket_encryption: weak; sid:1;)
+
+.. container:: example-rule
+
  alert krb5 any any -> any any (krb5.ticket_encryption: 23; sid:2;)
+
+.. container:: example-rule
+
  alert krb5 any any -> any any (krb5.ticket_encryption: rc4-hmac,rc4-hmac-exp; sid:3;)

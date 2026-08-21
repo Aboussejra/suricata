@@ -70,6 +70,7 @@ enum AppProtoEnum {
     ALPROTO_BITTORRENT_DHT,
     ALPROTO_POP3,
     ALPROTO_MDNS,
+    ALPROTO_LLMNR,
 
     // signature-only (ie not seen in flow)
     // HTTP for any version (ALPROTO_HTTP1 (version 1) or ALPROTO_HTTP2)
@@ -117,6 +118,24 @@ static inline bool AppProtoEquals(AppProto sigproto, AppProto alproto)
 }
 
 // whether a signature AppProto matches a flow (or signature) AppProto
+// only see DOH2/HTTP2 as the same
+static inline bool AppProtoEqualsStrict(AppProto sigproto, AppProto alproto)
+{
+    if (sigproto == alproto) {
+        return true;
+    }
+    switch (sigproto) {
+        case ALPROTO_HTTP2:
+            // a HTTP2 signature matches on either HTTP2 or DOH2 flows
+            return (alproto == ALPROTO_DOH2);
+        case ALPROTO_DOH2:
+            // a DOH2 signature accepts dns, http2 or http generic keywords
+            return (alproto == ALPROTO_HTTP2);
+    }
+    return false;
+}
+
+// whether a signature AppProto matches a flow (or signature) AppProto
 static inline AppProto AppProtoCommon(AppProto sigproto, AppProto alproto)
 {
     switch (sigproto) {
@@ -159,7 +178,14 @@ static inline AppProto AppProtoCommon(AppProto sigproto, AppProto alproto)
 }
 
 /**
- * \brief Maps the ALPROTO_*, to its string equivalent.
+ * \brief Maps the ALPROTO_*, to its registered string equivalent.
+ * \param alproto App layer protocol id.
+ * \retval String equivalent for the alproto.
+ */
+const char *AppProtoToStringRaw(AppProto alproto);
+
+/**
+ * \brief Maps the ALPROTO_*, to its normalized string equivalent.
  *
  * \param alproto App layer protocol id.
  *

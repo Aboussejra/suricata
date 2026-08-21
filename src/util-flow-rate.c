@@ -34,7 +34,7 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-FlowStorageId g_flowrate_storage_id = { .id = -1 };
+SCFlowStorageId g_flowrate_storage_id = { .id = -1 };
 
 FlowRateConfig flow_rate_config;
 
@@ -64,7 +64,7 @@ void FlowRateRegisterFlowStorage(void)
         return;
 
     bool track_flow = false;
-    track_flow = SCConfNodeLookupChild(root, "rate-tracking") != NULL ? true : false;
+    track_flow = SCConfNodeLookupChild(root, "rate-tracking") != NULL;
     if (!track_flow)
         return;
 
@@ -90,8 +90,7 @@ void FlowRateRegisterFlowStorage(void)
     }
     flow_rate_config.interval = SCTIME_ADD_SECS(interval, secs);
 
-    g_flowrate_storage_id =
-            FlowStorageRegister("flowrate", sizeof(void *), NULL, FlowRateStoreFree);
+    g_flowrate_storage_id = SCFlowStorageRegister("flowrate", FlowRateStoreFree);
 }
 
 bool FlowRateStorageEnabled(void)
@@ -131,7 +130,7 @@ FlowRateStore *FlowRateStoreInit(void)
     return frs;
 }
 
-FlowStorageId FlowRateGetStorageID(void)
+SCFlowStorageId FlowRateGetStorageID(void)
 {
     return g_flowrate_storage_id;
 }
@@ -227,10 +226,7 @@ void FlowRateStoreUpdate(FlowRateStore *frs, SCTime_t p_ts, uint32_t pkt_len, in
 
 bool FlowRateIsExceeding(FlowRateStore *frs, int direction)
 {
-    if (frs->dir[direction].sum >= flow_rate_config.bytes) {
-        return true;
-    }
-    return false;
+    return frs->dir[direction].sum >= flow_rate_config.bytes;
 }
 
 #ifdef UNITTESTS

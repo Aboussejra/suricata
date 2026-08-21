@@ -78,10 +78,10 @@ void DetectIcmpv4HdrRegister(void)
  */
 static int DetectIcmpv4HdrSetup(DetectEngineCtx *de_ctx, Signature *s, const char *_unused)
 {
-    if (!(DetectProtoContainsProto(&s->proto, IPPROTO_ICMP)))
+    if (!(DetectProtoContainsProto(&s->init_data->proto, IPPROTO_ICMP)))
         return -1;
 
-    s->proto.flags |= DETECT_PROTO_IPV4;
+    s->init_data->proto.flags |= DETECT_PROTO_IPV4;
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     if (SCDetectBufferSetActiveList(de_ctx, s, g_icmpv4hdr_buffer_id) < 0)
@@ -99,7 +99,7 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
         SCReturnPtr(NULL, "InspectionBuffer");
     }
 
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         const ICMPV4Hdr *icmpv4h = PacketGetICMPv4(p);
         uint16_t hlen = ICMPV4_GET_HLEN_ICMPV4H(p);
@@ -113,7 +113,7 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
         const uint32_t data_len = hlen;
         const uint8_t *data = (const uint8_t *)icmpv4h;
 
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, data, data_len, transforms);
     }
 

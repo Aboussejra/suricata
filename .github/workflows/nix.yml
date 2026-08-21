@@ -2,14 +2,17 @@ name: "Nix Env Build"
 on:
   pull_request:
   push:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6.0.2
+    - uses: actions/checkout@v7.0.1
     - uses: cachix/install-nix-action@v31
       with:
-        nix_path: nixpkgs=channel:nixos-24.11
+        nix_path: nixpkgs=channel:nixos-25.11
     - run: nix-shell --run ./scripts/bundle.sh
     - run: nix-shell --run ./autogen.sh
     - run: nix-shell --run "./configure CC=clang"

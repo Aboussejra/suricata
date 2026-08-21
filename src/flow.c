@@ -36,7 +36,6 @@
 #include "util-time.h"
 
 #include "flow.h"
-#include "flow-bindgen.h"
 #include "flow-queue.h"
 #include "flow-hash.h"
 #include "flow-util.h"
@@ -271,7 +270,7 @@ void FlowSwap(Flow *f)
     SWAP_VARS(uint64_t, f->todstbytecnt, f->tosrcbytecnt);
 
     if (MacSetFlowStorageEnabled()) {
-        MacSet *ms = FlowGetStorageById(f, MacSetGetFlowStorageID());
+        MacSet *ms = SCFlowGetStorageById(f, MacSetGetFlowStorageID());
         if (ms != NULL) {
             MacSetSwap(ms);
         }
@@ -362,7 +361,7 @@ static inline void FlowUpdateFlowRate(
             return;
         if ((dir == TOCLIENT) && (f->flags & FLOW_IS_ELEPHANT_TOCLIENT))
             return;
-        FlowRateStore *frs = FlowGetStorageById(f, FlowRateGetStorageID());
+        FlowRateStore *frs = SCFlowGetStorageById(f, FlowRateGetStorageID());
         if (frs != NULL) {
             FlowRateStoreUpdate(frs, p->ts, GET_PKT_LEN(p), dir);
             bool fr_exceeds = FlowRateIsExceeding(frs, dir);
@@ -397,7 +396,7 @@ static inline void FlowUpdateEthernet(
 {
     if (PacketIsEthernet(p) && MacSetFlowStorageEnabled()) {
         const EthernetHdr *ethh = PacketGetEthernet(p);
-        MacSet *ms = FlowGetStorageById(f, MacSetGetFlowStorageID());
+        MacSet *ms = SCFlowGetStorageById(f, MacSetGetFlowStorageID());
         if (ms != NULL) {
             if (toserver) {
                 MacSetAddWithCtr(ms, ethh->eth_src, ethh->eth_dst, tv,
@@ -535,7 +534,13 @@ void FlowHandlePacketUpdate(Flow *f, Packet *p, ThreadVars *tv, DecodeThreadVars
     }
 
     if (f->flags & FLOW_ACTION_DROP) {
-        PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FLOW_DROP);
+        if (f->flags & FLOW_ACTION_BY_FIREWALL) {
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FW_FLOW_DROP);
+        } else if (f->flags & FLOW_ACTION_BY_EXCEPTION_POLICY) {
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_EP_FLOW_DROP);
+        } else {
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FLOW_DROP);
+        }
     }
 
     if (f->flags & FLOW_NOPAYLOAD_INSPECTION) {
@@ -688,7 +693,7 @@ void FlowInitConfig(bool quiet)
 
     FlowInitFlowProto();
 
-    uint32_t sz = sizeof(Flow) + FlowStorageSize();
+    uint32_t sz = sizeof(Flow) + SCFlowStorageSize();
     SCLogConfig("flow size %u, memcap allows for %" PRIu64 " flows. Per hash row in perfect "
                 "conditions %" PRIu64,
             sz, flow_memcap_copy / sz, (flow_memcap_copy / sz) / flow_config.hash_size);
@@ -1131,7 +1136,7 @@ int FlowClearMemory(Flow* f, uint8_t proto_map)
         flow_freefuncs[proto_map].Freefunc(f->protoctx);
     }
 
-    FlowFreeStorage(f);
+    SCFlowFreeStorage(f);
 
     FLOW_RECYCLE(f);
 
@@ -1177,6 +1182,11 @@ uint8_t FlowGetDisruptionFlags(const Flow *f, uint8_t flags)
 
     if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) {
         newflags |= STREAM_DEPTH;
+    }
+    if (ssn->flags & STREAMTCP_FLAG_ASYNC) {
+        if (stream->tcp_flags == 0) {
+            newflags |= STREAM_ASYNC;
+        }
     }
     /* todo: handle pass case (also for UDP!) */
 
@@ -1231,6 +1241,45 @@ uint16_t SCFlowGetSourcePort(const Flow *flow)
     return flow->sp;
 }
 
+const uint8_t *SCFlowGetSourceAddressAsRawPtr(const Flow *flow)
+{
+    return flow->src.address.address_un_data8;
+}
+
+const uint8_t *SCFlowGetDestinationAddressAsRawPtr(const Flow *flow)
+{
+    return flow->dst.address.address_un_data8;
+}
+
+/**
+ * \brief Return true if the flow is IPv4.
+ */
+bool SCFlowIsIPv4(const Flow *flow)
+{
+    return FLOW_IS_IPV4(flow);
+}
+
+/**
+ * \brief Return true if the flow is IPv6.
+ */
+bool SCFlowIsIPv6(const Flow *flow)
+{
+    return FLOW_IS_IPV6(flow);
+}
+
+/**
+ * \brief Get flow IP protocol.
+ */
+uint8_t SCFlowGetIPProtocol(const Flow *flow)
+{
+    return flow->proto;
+}
+
+AppProto SCFlowGetAppProtocol(const Flow *f)
+{
+    return f->alproto;
+}
+
 /**
  * \brief Get flow destination port.
  *
@@ -1241,6 +1290,22 @@ uint16_t SCFlowGetSourcePort(const Flow *flow)
 uint16_t SCFlowGetDestinationPort(const Flow *flow)
 {
     return flow->dp;
+}
+
+/**
+ * \brief Get the number of packets seen toserver.
+ */
+uint32_t SCFlowGetToServerPacketCount(const Flow *flow)
+{
+    return flow->todstpktcnt;
+}
+
+/**
+ * \brief Get the number of packets seen toclient.
+ */
+uint32_t SCFlowGetToClientPacketCount(const Flow *flow)
+{
+    return flow->tosrcpktcnt;
 }
 
 /**
@@ -1479,6 +1544,6 @@ void FlowRegisterTests (void)
     UtRegisterTest("FlowTest09 -- Test flow Allocations when it reach memcap",
                    FlowTest09);
 
-    RegisterFlowStorageTests();
+    SCRegisterFlowStorageTests();
 #endif /* UNITTESTS */
 }

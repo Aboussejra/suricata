@@ -73,17 +73,14 @@ documentation_style = "doxy"
 #
 # default: []
 include = [
-    "RdpState",
-    "SIPState",
     "ModbusState",
-    "CMark",
-    "QuicState",
-    "QuicTransaction",
     "FtpEvent",
     "FtpRequestCommand",
     "FtpStateValues",
     "FtpDataStateValues",
-    "HTTP2TransactionState",
+    "HTTP2TxProgress",
+    "HTTP2TxGlobalProgress",
+    "HTTP2TxType",
     "DataRepType",
 ]
 
@@ -91,20 +88,7 @@ include = [
 # default: []
 exclude = [
     "CLuaState",
-    "FileContainer",
-    "HttpRangeContainerBlock",
-    "IPPROTO_TCP",
-    "IPPROTO_UDP",
-    "SIGMATCH_NOOPT",
-    "SIGMATCH_INFO_STICKY_BUFFER",
-    "SIGMATCH_INFO_MULTI_BUFFER",
-    "SIGMATCH_INFO_UINT8",
-    "SIGMATCH_INFO_UINT16",
-    "SIGMATCH_INFO_UINT32",
-    "SIGMATCH_INFO_UINT64",
-    "SIGMATCH_INFO_MULTI_UINT",
-    "SIGMATCH_INFO_ENUM_UINT",
-    "SIGMATCH_INFO_BITFLAGS_UINT",
+    "DETECT_BYTEMATH_ENDIAN_DEFAULT",
 ]
 
 # Types of items that we'll generate. If empty, then all types of item are emitted.

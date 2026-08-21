@@ -39,6 +39,7 @@
 #include "util-misc.h"
 #include "util-time.h"
 
+#include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-metadata.h"
 #include "app-layer-parser.h"
@@ -185,6 +186,7 @@ static void AlertJsonReference(const PacketAlert *pa, SCJsonBuilder *jb)
          * add +2 to safisfy gcc 15 + -Wformat-truncation=2
          */
         const size_t size_needed = kv->key_len + kv->reference_len + 3;
+        DEBUG_VALIDATE_BUG_ON(size_needed > DETECT_MAX_RULE_SIZE);
         char kv_store[size_needed];
         snprintf(kv_store, size_needed, "%s%s", kv->key, kv->reference);
         SCJbAppendString(jb, kv_store);
@@ -229,6 +231,9 @@ void AlertJsonHeader(const Packet *p, const PacketAlert *pa, SCJsonBuilder *js, 
     SCJbOpenObject(js, "alert");
 
     SCJbSetString(js, "action", action);
+    if (EngineModeIsFirewall()) {
+        SCJbSetString(js, "engine", (pa->s->flags & SIG_FLAG_FIREWALL) ? "fw" : "td");
+    }
     SCJbSetUint(js, "gid", pa->s->gid);
     SCJbSetUint(js, "signature_id", pa->s->id);
     SCJbSetUint(js, "rev", pa->s->rev);
@@ -276,7 +281,7 @@ void AlertJsonHeader(const Packet *p, const PacketAlert *pa, SCJsonBuilder *js, 
     SCJbClose(js);
 }
 
-static void AlertJsonTunnel(const Packet *p, SCJsonBuilder *js)
+static void AlertJsonTunnel(const Packet *p, SCJsonBuilder *js, OutputJsonCommonSettings *cfg)
 {
     if (p->root == NULL) {
         return;
@@ -286,7 +291,7 @@ static void AlertJsonTunnel(const Packet *p, SCJsonBuilder *js)
 
     enum PktSrcEnum pkt_src;
     JsonAddrInfo addr = json_addr_info_zero;
-    JsonAddrInfoInit(p->root, 0, &addr);
+    JsonAddrInfoInit(p->root, 0, &addr, cfg);
     pkt_src = p->root->pkt_src;
 
     SCJbSetString(js, "src_ip", addr.src_ip);
@@ -318,61 +323,68 @@ static void AlertAddPayload(AlertJsonOutputCtx *json_output_ctx, SCJsonBuilder *
     }
 }
 
-static void AlertAddAppLayer(
-        const Packet *p, SCJsonBuilder *jb, const uint64_t tx_id, const uint16_t option_flags)
+static void AlertAddAppLayerStates(const Packet *p, const AppProto alproto, const uint8_t sub_state,
+        void *tx, SCJsonBuilder *jb)
 {
-    const AppProto proto = FlowGetAppProtocol(p->flow);
+    const int ts = AppLayerParserGetStateProgress(p->flow->proto, alproto, tx, STREAM_TOSERVER);
+    const int tc = AppLayerParserGetStateProgress(p->flow->proto, alproto, tx, STREAM_TOCLIENT);
+    if (sub_state == 0) {
+        SCJbSetString(jb, "ts_progress",
+                AppLayerParserGetStateNameById(p->flow->proto, alproto, ts, STREAM_TOSERVER));
+        SCJbSetString(jb, "tc_progress",
+                AppLayerParserGetStateNameById(p->flow->proto, alproto, tc, STREAM_TOCLIENT));
+    } else {
+        const char *sname = AppLayerParserGetSubStateName(alproto, sub_state);
+        if (sname != NULL) {
+            SCJbSetString(jb, "sub_state", sname);
+        }
+        SCJbSetString(jb, "ts_progress",
+                AppLayerParserGetSubStateProgressName(
+                        alproto, sub_state, (uint8_t)ts, STREAM_TOSERVER));
+        SCJbSetString(jb, "tc_progress",
+                AppLayerParserGetSubStateProgressName(
+                        alproto, sub_state, (uint8_t)tc, STREAM_TOCLIENT));
+    }
+}
+
+static void AlertAddAppLayer(const Packet *p, SCJsonBuilder *jb, const uint64_t tx_id,
+        const uint8_t sub_state, const uint16_t option_flags)
+{
+    const AppProto proto = SCFlowGetAppProtocol(p->flow);
     EveJsonSimpleAppLayerLogger *al = SCEveJsonSimpleGetLogger(proto);
+    void *state = FlowGetAppState(p->flow);
+    void *tx = NULL;
+    if (state) {
+        tx = AppLayerParserGetTx(p->flow->proto, proto, state, tx_id);
+    }
+    if (tx == NULL)
+        return;
+
+    AlertAddAppLayerStates(p, proto, sub_state, tx, jb);
+
     SCJsonBuilderMark mark = { 0, 0, 0 };
     if (al && al->LogTx) {
-        void *state = FlowGetAppState(p->flow);
-        if (state) {
-            void *tx = AppLayerParserGetTx(p->flow->proto, proto, state, tx_id);
-            if (tx) {
-                const int ts =
-                        AppLayerParserGetStateProgress(p->flow->proto, proto, tx, STREAM_TOSERVER);
-                const int tc =
-                        AppLayerParserGetStateProgress(p->flow->proto, proto, tx, STREAM_TOCLIENT);
-                SCJbSetString(jb, "ts_progress",
-                        AppLayerParserGetStateNameById(p->flow->proto, proto, ts, STREAM_TOSERVER));
-                SCJbSetString(jb, "tc_progress",
-                        AppLayerParserGetStateNameById(p->flow->proto, proto, tc, STREAM_TOCLIENT));
-                SCJbGetMark(jb, &mark);
-                switch (proto) {
-                    // first check some protocols need special options for alerts logging
-                    case ALPROTO_WEBSOCKET:
-                        if (option_flags &
-                                (LOG_JSON_WEBSOCKET_PAYLOAD | LOG_JSON_WEBSOCKET_PAYLOAD_BASE64)) {
-                            bool pp = (option_flags & LOG_JSON_WEBSOCKET_PAYLOAD) != 0;
-                            bool pb64 = (option_flags & LOG_JSON_WEBSOCKET_PAYLOAD_BASE64) != 0;
-                            if (!SCWebSocketLogDetails(tx, jb, pp, pb64)) {
-                                SCJbRestoreMark(jb, &mark);
-                            }
-                            // nothing more to log or do
-                            return;
-                        }
+        SCJbGetMark(jb, &mark);
+        switch (proto) {
+            // first check some protocols need special options for alerts logging
+            case ALPROTO_WEBSOCKET:
+                if (option_flags &
+                        (LOG_JSON_WEBSOCKET_PAYLOAD | LOG_JSON_WEBSOCKET_PAYLOAD_BASE64)) {
+                    const bool pp = (option_flags & LOG_JSON_WEBSOCKET_PAYLOAD) != 0;
+                    const bool pb64 = (option_flags & LOG_JSON_WEBSOCKET_PAYLOAD_BASE64) != 0;
+                    if (!SCWebSocketLogDetails(tx, jb, pp, pb64)) {
+                        SCJbRestoreMark(jb, &mark);
+                    }
+                    // nothing more to log or do
+                    return;
                 }
-                if (!al->LogTx(tx, jb)) {
-                    SCJbRestoreMark(jb, &mark);
-                }
-            }
+        }
+        if (!al->LogTx(tx, jb)) {
+            SCJbRestoreMark(jb, &mark);
         }
         return;
     }
-    void *state = FlowGetAppState(p->flow);
-    if (state) {
-        void *tx = AppLayerParserGetTx(p->flow->proto, proto, state, tx_id);
-        if (tx) {
-            const int ts =
-                    AppLayerParserGetStateProgress(p->flow->proto, proto, tx, STREAM_TOSERVER);
-            const int tc =
-                    AppLayerParserGetStateProgress(p->flow->proto, proto, tx, STREAM_TOCLIENT);
-            SCJbSetString(jb, "ts_progress",
-                    AppLayerParserGetStateNameById(p->flow->proto, proto, ts, STREAM_TOSERVER));
-            SCJbSetString(jb, "tc_progress",
-                    AppLayerParserGetStateNameById(p->flow->proto, proto, tc, STREAM_TOCLIENT));
-        }
-    }
+
     switch (proto) {
         case ALPROTO_HTTP1:
             // TODO: Could result in an empty http object being logged.
@@ -436,26 +448,20 @@ static void AlertAddAppLayer(
                 SCJbRestoreMark(jb, &mark);
             }
             break;
-        case ALPROTO_DCERPC: {
-            if (state) {
-                void *tx = AppLayerParserGetTx(p->flow->proto, proto, state, tx_id);
-                if (tx) {
-                    SCJbGetMark(jb, &mark);
-                    SCJbOpenObject(jb, "dcerpc");
-                    if (p->proto == IPPROTO_TCP) {
-                        if (!SCDcerpcLogJsonRecordTcp(state, tx, jb)) {
-                            SCJbRestoreMark(jb, &mark);
-                        }
-                    } else {
-                        if (!SCDcerpcLogJsonRecordUdp(state, tx, jb)) {
-                            SCJbRestoreMark(jb, &mark);
-                        }
-                    }
-                    SCJbClose(jb);
+        case ALPROTO_DCERPC:
+            SCJbGetMark(jb, &mark);
+            SCJbOpenObject(jb, "dcerpc");
+            if (p->proto == IPPROTO_TCP) {
+                if (!SCDcerpcLogJsonRecordTcp(state, tx, jb)) {
+                    SCJbRestoreMark(jb, &mark);
+                }
+            } else {
+                if (!SCDcerpcLogJsonRecordUdp(state, tx, jb)) {
+                    SCJbRestoreMark(jb, &mark);
                 }
             }
+            SCJbClose(jb);
             break;
-        }
         default:
             break;
     }
@@ -552,11 +558,11 @@ void EveAddVerdict(SCJsonBuilder *jb, const Packet *p, const uint8_t alert_actio
             JB_SET_STRING(jb, "action", "alert");
         }
         if (packet_action & ACTION_REJECT) {
-            JB_SET_STRING(jb, "reject-target", "to_client");
+            JB_SET_STRING(jb, "reject_target", "to_client");
         } else if (packet_action & ACTION_REJECT_DST) {
-            JB_SET_STRING(jb, "reject-target", "to_server");
+            JB_SET_STRING(jb, "reject_target", "to_server");
         } else if (packet_action & ACTION_REJECT_BOTH) {
-            JB_SET_STRING(jb, "reject-target", "both");
+            JB_SET_STRING(jb, "reject_target", "both");
         }
         SCJbOpenArray(jb, "reject");
         switch (p->proto) {
@@ -642,6 +648,49 @@ static bool AlertJsonStreamData(const AlertJsonOutputCtx *json_output_ctx, JsonA
     return false;
 }
 
+static void AlertJsonAddFirewall(SCJsonBuilder *jb, const Signature *s)
+{
+    struct DetectFirewallPolicy pol = { .action = s->action, .action_scope = s->action_scope };
+
+    SCJbOpenObject(jb, "firewall");
+    const char *hook = NULL;
+    char hook_string[256];
+    switch (s->detect_table) {
+        case DETECT_TABLE_APP_FILTER:
+            if (s->flags & SIG_FLAG_TOSERVER) {
+                hook = AppLayerParserGetStateNameById(
+                        IPPROTO_TCP, s->alproto, s->app_progress_hook, STREAM_TOSERVER);
+            } else {
+                hook = AppLayerParserGetStateNameById(
+                        IPPROTO_TCP, s->alproto, s->app_progress_hook, STREAM_TOCLIENT);
+            }
+            if (hook) {
+                snprintf(hook_string, sizeof(hook_string), "%s:%s", AppProtoToString(s->alproto),
+                        hook);
+                hook = hook_string;
+            }
+            break;
+        case DETECT_TABLE_PACKET_FILTER:
+            hook = "packet:filter";
+            break;
+        case DETECT_TABLE_PACKET_PRE_FLOW:
+            hook = "packet:pre_flow";
+            break;
+        case DETECT_TABLE_PACKET_PRE_STREAM:
+            hook = "packet:pre_stream";
+            break;
+    }
+    if (hook) {
+        SCJbSetString(jb, "hook", hook);
+    }
+    char policy_string[64] = "";
+    DetectFirewallPolicyToString(&pol, policy_string, sizeof(policy_string));
+    if (strlen(policy_string) > 0) {
+        SCJbSetString(jb, "policy", policy_string);
+    }
+    SCJbClose(jb);
+}
+
 static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 {
     AlertJsonOutputCtx *json_output_ctx = aft->json_output_ctx;
@@ -658,7 +707,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 
         /* First initialize the address info (5-tuple). */
         JsonAddrInfo addr = json_addr_info_zero;
-        JsonAddrInfoInit(p, LOG_DIR_PACKET, &addr);
+        JsonAddrInfoInit(p, LOG_DIR_PACKET, &addr, &json_output_ctx->eve_ctx->cfg);
 
         /* Check for XFF, overwriting address info if needed. */
         HttpXFFCfg *xff_cfg = json_output_ctx->xff_cfg != NULL ? json_output_ctx->xff_cfg
@@ -667,7 +716,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
         char xff_buffer[XFF_MAXLEN];
         xff_buffer[0] = 0;
         if ((xff_cfg != NULL) && !(xff_cfg->flags & XFF_DISABLED) && p->flow != NULL) {
-            if (FlowGetAppProtocol(p->flow) == ALPROTO_HTTP1) {
+            if (SCFlowGetAppProtocol(p->flow) == ALPROTO_HTTP1) {
                 if (pa->flags & PACKET_ALERT_FLAG_TX) {
                     have_xff_ip = HttpXFFGetIPFromTx(p->flow, pa->tx_id, xff_cfg,
                             xff_buffer, XFF_MAXLEN);
@@ -703,13 +752,17 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
         AlertJsonHeader(p, pa, jb, json_output_ctx->flags, &addr, xff_buffer);
 
         if (PacketIsTunnel(p)) {
-            AlertJsonTunnel(p, jb);
+            AlertJsonTunnel(p, jb, &json_output_ctx->eve_ctx->cfg);
+        }
+
+        if (pa->s->flags & SIG_FLAG_FIREWALL) {
+            AlertJsonAddFirewall(jb, pa->s);
         }
 
         if (p->flow != NULL) {
             if (pa->flags & PACKET_ALERT_FLAG_TX) {
                 if (json_output_ctx->flags & LOG_JSON_APP_LAYER) {
-                    AlertAddAppLayer(p, jb, pa->tx_id, json_output_ctx->flags);
+                    AlertAddAppLayer(p, jb, pa->tx_id, pa->sub_state, json_output_ctx->flags);
                 }
                 /* including fileinfo data is configured by the metadata setting */
                 if (json_output_ctx->flags & LOG_JSON_RULE_METADATA) {
@@ -830,7 +883,7 @@ static int AlertJsonDecoderEvent(ThreadVars *tv, JsonAlertLogThread *aft, const 
         AlertJsonHeader(p, pa, jb, json_output_ctx->flags, NULL, NULL);
 
         if (PacketIsTunnel(p)) {
-            AlertJsonTunnel(p, jb);
+            AlertJsonTunnel(p, jb, &json_output_ctx->eve_ctx->cfg);
         }
 
         /* base64-encoded full packet */
@@ -852,14 +905,6 @@ static int AlertJsonDecoderEvent(ThreadVars *tv, JsonAlertLogThread *aft, const 
     }
 
     return TM_ECODE_OK;
-}
-
-static int JsonAlertFlush(ThreadVars *tv, void *thread_data, const Packet *p)
-{
-    JsonAlertLogThread *aft = thread_data;
-    SCLogDebug("%s flushing %s", tv->name, ((LogFileCtx *)(aft->ctx->file_ctx))->filename);
-    OutputJsonFlush(aft->ctx);
-    return 0;
 }
 
 static int JsonAlertLogger(ThreadVars *tv, void *thread_data, const Packet *p)
@@ -1109,7 +1154,6 @@ void JsonAlertLogRegister (void)
 {
     OutputPacketLoggerFunctions output_logger_functions = {
         .LogFunc = JsonAlertLogger,
-        .FlushFunc = JsonAlertFlush,
         .ConditionFunc = JsonAlertLogCondition,
         .ThreadInitFunc = JsonAlertLogThreadInit,
         .ThreadDeinitFunc = JsonAlertLogThreadDeinit,

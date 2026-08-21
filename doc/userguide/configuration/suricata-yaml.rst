@@ -362,6 +362,8 @@ There are several types of output. The general structure is:
       enabled: yes
       filename: fast.log
       append: yes/no
+      # Compress IPv6 addresses per RFC5952 as they are added to the fast log. The default is no.
+      ipv6-compress: yes/no
 
 Enabling all of the logs, will result in a much lower performance and
 the use of more disc space, so enable only the outputs you need.
@@ -385,6 +387,8 @@ appearance of a single fast.log-file line:
      filename: fast.log     #The name of the file in the default logging directory.
      append: yes/no         #If this option is set to yes, the last filled fast.log-file will not be
                             #overwritten while restarting Suricata.
+     # Compress IPv6 addresses per RFC5952 as they are added to the fast log. The default is no.
+     ipv6-compress: yes/no
 
 .. _suricata-yaml-outputs-eve:
 
@@ -425,43 +429,6 @@ Example:
   - tls-store:
       enabled: yes
       #certs-log-dir: certs # directory to store the certificates files
-
-A line based log of HTTP requests (http.log)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. attention:: http-log is deprecated in Suricata 8.0 and will be
-               removed in Suricata 9.0.
-
-This log keeps track of all HTTP-traffic events. It contains the HTTP
-request, hostname, URI and the User-Agent. This information will be
-stored in the http.log (default name, in the suricata log
-directory). This logging can also be performed through the use of the
-:ref:`Eve-log capability <eve-json-format>`.
-
-Example of a HTTP-log line with non-extended logging:
-
-::
-
-  07/01/2014-04:20:14.338309 vg.no [**] / [**] Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2)
-  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.114 Safari/537.36 [**]
-  192.168.1.6:64685 -> 195.88.54.16:80
-
-Example of a HTTP-log line with extended logging:
-
-::
-
-  07/01/2014-04:21:06.994705 vg.no [**] / [**] Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_2)
-  AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.1916.114 Safari/537.36 [**] <no referer> [**]
-  GET [**] HTTP/1.1 [**] 301 => http://www.vg.no/ [**] 239 bytes [**] 192.168.1.6:64726 -> 195.88.54.16:80
-
-::
-
-  - http-log:                     #The log-name.
-      enabled: yes                #This log is enabled. Set 'no' to disable.
-      filename: http.log          #The name of the file in the default logging directory.
-      append: yes/no              #If this option is set to yes, the last filled http.log-file will not be
-                                  # overwritten while restarting Suricata.
-      extended: yes               # If set to yes more information is written about the event.
 
 .. _suricata_yaml_pcap_log:
 
@@ -540,13 +507,13 @@ In multi mode the filename takes a few special variables:
   - %n representing the thread number
   - %i representing the thread id
   - %t representing the timestamp (secs or secs.usecs based on 'ts-format')
-  
+
   Example: filename: pcap.%n.%t
 
 .. note:: It is possible to use directories but the directories are not
   created by Suricata. For example ``filename: pcaps/%n/log.%s`` will log into
   the pre-existing ``pcaps`` directory and per thread sub directories.
-  
+
 .. note:: that the limit and max-files settings are enforced per thread. So the
   size limit using 8 threads with 1000mb files and 2000 files is about 16TiB.
 
@@ -565,6 +532,8 @@ because of the amount of information it has to store.
       filename: alert-debug.log   #The name of the file in the default logging directory.
       append: yes/no              #If this option is set to yes, the last filled fast.log-file will not be
                                   # overwritten while restarting Suricata.
+      # Compress IPv6 addresses per RFC5952 as they are added to the debug log log. The default is no.
+      ipv6-compress: yes/no
 
 Stats
 ~~~~~
@@ -693,6 +662,8 @@ has values which can be managed by the user.
     grouping:
       tcp-priority-ports: 53, 80, 139, 443, 445, 1433, 3306, 3389, 6666, 6667, 8080
       udp-priority-ports: 53, 135, 5060
+    flowbits:
+      max-per-signature: 8
 
 At all of these options, you can add (or change) a value. Most
 signatures have the adjustment to focus on one direction, meaning
@@ -745,6 +716,11 @@ The engine shall then try to club the rules that use the ports defined
 in groups of their own and put them on top of the list of rules to be matched
 against traffic on "priority".
 
+The ``flowbits`` option carries flowbits detection specific settings. With
+``max-per-signature`` setting, it is possible to define how many times flowbits
+keyword can be seen in any one signature. This does not include ``flowbits:noalert;``.
+Minimum value allowed is 1 and the default is 8.
+
 *Example 4	Detection-engine grouping tree*
 
 .. image:: suricata-yaml/grouping_tree.png
@@ -789,7 +765,7 @@ The prefilter engines for other non-MPM keywords can then be enabled in specific
 
 E.g.
 
-::
+.. container:: example-rule
 
   alert ip any any -> any any (ttl:123; prefilter; sid:1;)
 
@@ -1535,6 +1511,14 @@ the default behavior).
 
 Each supported protocol has a dedicated subsection under ``protocols``.
 
+.. note:: All applayer parsers can be enabled or disabled for specific carrier
+   protocols. Suricata first looks for carrier protocol specific setting and
+   if not found, falls back to the common enabled setting. e.g. if ``sip`` is
+   being registered, Suricata will first look if ``app-layer.protocols.sip.tcp.enabled``
+   and ``app-layer.protocols.sip.udp.enabled`` are set. If not, then a search would be
+   made for ``app-layer.protocols.sip.enabled`` and that setting would apply to both
+   SIP/TCP as well as SIP/UDP.
+
 Asn1_max_frames
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2059,6 +2043,10 @@ parameter that can be customized.
 An app-layer event `protocol.too_many_transactions` is triggered when this value is reached.
 The point of this parameter is to find a balance between the completeness of analysis
 and the resource consumption.
+
+When this threshold is reached, a new transaction will not be allocated,
+and the flow will be put in error state, as it would become too expensive
+in terms of CPU for Suricata to continue processing it.
 
 For HTTP2, this parameter is named `max-streams` as an HTTP2 stream will get translated
 into one Suricata transaction. This configuration parameter is used whatever the
@@ -2790,6 +2778,43 @@ use of.
     macos: []
     vista: []
     windows2k3: []
+
+Suricata as a Firewall options (experimental)
+---------------------------------------------
+
+It is possible to run Suricata as a firewall.
+Please read :ref:`Firewall Mode Design <firewall mode design>` before using this.
+The existing yaml configuration options are listed below. For more examples on default policy configuration by app-layer hook, check :ref:`firewall examples-default policies-http`.
+
+If the engine is run in firewall mode, dedicated stats counters will be added to
+the stats logs. To see the stats reported for the firewall mode, refer to :ref:`firewall mode stats`.
+
+::
+
+   firewall:
+     # toggle to enable firewall mode
+     #enabled: no
+     # Firewall rule file are in their own path and are not managed
+     # by Suricata-Update.
+     #rule-path: /etc/suricata/firewall/
+
+     # List of files with firewall rules. Order matters, files are loaded
+     # in order and rules are applied in that order (per state, see docs)
+     #rule-files:
+     #  - firewall.rules
+
+     # Default policies
+     #
+     # Choose a default policy for each firewall hook.
+     # It is also possible to specify policies by app-layer protocol.
+     # DNS example: Drop and alert on all DNS requests that are not allowed in firewall.rules, accept all responses.
+     #
+     #policies:
+     #  packet-filter: ["drop:packet"]
+     #  dns:
+     #    request-started: ["accept:hook"]
+     #    request-complete: ["drop:flow", "alert"]
+     #    response-started: ["accept:tx"]
 
 Engine analysis and profiling
 -----------------------------

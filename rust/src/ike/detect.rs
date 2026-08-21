@@ -38,9 +38,10 @@ use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use suricata_sys::sys::{
     DetectEngineCtx, DetectEngineThreadCtx, SCDetectBufferSetActiveList,
-    SCDetectHelperBufferMpmRegister, SCDetectHelperBufferRegister, SCDetectHelperKeywordRegister,
-    SCDetectHelperMultiBufferMpmRegister, SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList,
-    SCSigTableAppLiteElmt, SigMatchCtx, Signature,
+    SCDetectHelperBufferMpmRegister, SCDetectHelperBufferProgressRegister,
+    SCDetectHelperKeywordRegister, SCDetectHelperMultiBufferMpmRegister,
+    SCDetectSignatureSetAppProto, SCSigMatchAppendSMToList, SCSigTableAppLiteElmt, SigMatchCtx,
+    Signature,
 };
 
 unsafe extern "C" fn ike_get_nonce_data(
@@ -191,37 +192,29 @@ unsafe extern "C" fn ike_detect_chosen_sa_match(
     } else if tx.ike_version == 2 {
         for attr in tx.hdr.ikev2_transforms.iter() {
             match attr {
-                IkeV2Transform::Encryption(e) => {
-                    if ctx.attribute == AttributeType::AlgEnc {
-                        if detect_match_uint(&ctx.value, e.0.into()) {
-                            return 1;
-                        }
-                        return 0;
+                IkeV2Transform::Encryption(e) if ctx.attribute == AttributeType::AlgEnc => {
+                    if detect_match_uint(&ctx.value, e.0.into()) {
+                        return 1;
                     }
+                    return 0;
                 }
-                IkeV2Transform::Auth(e) => {
-                    if ctx.attribute == AttributeType::AlgAuth {
-                        if detect_match_uint(&ctx.value, e.0.into()) {
-                            return 1;
-                        }
-                        return 0;
+                IkeV2Transform::Auth(e) if ctx.attribute == AttributeType::AlgAuth => {
+                    if detect_match_uint(&ctx.value, e.0.into()) {
+                        return 1;
                     }
+                    return 0;
                 }
-                IkeV2Transform::PRF(ref e) => {
-                    if ctx.attribute == AttributeType::AlgPrf {
-                        if detect_match_uint(&ctx.value, e.0.into()) {
-                            return 1;
-                        }
-                        return 0;
+                IkeV2Transform::PRF(ref e) if ctx.attribute == AttributeType::AlgPrf => {
+                    if detect_match_uint(&ctx.value, e.0.into()) {
+                        return 1;
                     }
+                    return 0;
                 }
-                IkeV2Transform::DH(ref e) => {
-                    if ctx.attribute == AttributeType::AlgDh {
-                        if detect_match_uint(&ctx.value, e.0.into()) {
-                            return 1;
-                        }
-                        return 0;
+                IkeV2Transform::DH(ref e) if ctx.attribute == AttributeType::AlgDh => {
+                    if detect_match_uint(&ctx.value, e.0.into()) {
+                        return 1;
                     }
+                    return 0;
                 }
                 _ => (),
             }
@@ -326,10 +319,12 @@ unsafe extern "C" fn ike_detect_nonce_payload_length_match(
 ) -> c_int {
     let tx = cast_pointer!(tx, IKETransaction);
     let ctx = cast_pointer!(ctx, DetectUintData<u32>);
-    if tx.ike_version == 1 && !tx.hdr.ikev1_header.nonce.is_empty()
-        && detect_match_uint(ctx, tx.hdr.ikev1_header.nonce.len() as u32) {
-            return 1;
-        }
+    if tx.ike_version == 1
+        && !tx.hdr.ikev1_header.nonce.is_empty()
+        && detect_match_uint(ctx, tx.hdr.ikev1_header.nonce.len() as u32)
+    {
+        return 1;
+    }
     return 0;
 }
 
@@ -371,10 +366,12 @@ unsafe extern "C" fn ike_detect_payload_len_match(
 ) -> c_int {
     let tx = cast_pointer!(tx, IKETransaction);
     let ctx = cast_pointer!(ctx, DetectUintData<u32>);
-    if tx.ike_version == 1 && !tx.hdr.ikev1_header.key_exchange.is_empty()
-        && detect_match_uint(ctx, tx.hdr.ikev1_header.key_exchange.len() as u32) {
-            return 1;
-        }
+    if tx.ike_version == 1
+        && !tx.hdr.ikev1_header.key_exchange.is_empty()
+        && detect_match_uint(ctx, tx.hdr.ikev1_header.key_exchange.len() as u32)
+    {
+        return 1;
+    }
     return 0;
 }
 
@@ -413,7 +410,7 @@ pub unsafe extern "C" fn SCDetectIkeRegister() {
     let kw_nonce = SigTableElmtStickyBuffer {
         name: String::from("ike.nonce_payload"),
         desc: String::from("sticky buffer to match on the IKE nonce_payload"),
-        url: String::from("/rules/ike-keywords.html#ike-nonce_payload"),
+        url: String::from("/rules/ike-keywords.html#ike-nonce-payload"),
         setup: ike_nonce_payload_setup,
     };
     helper_keyword_register_sticky_buffer(&kw_nonce);
@@ -437,10 +434,11 @@ pub unsafe extern "C" fn SCDetectIkeRegister() {
         flags: SIGMATCH_INFO_UINT32,
     };
     G_IKE_NONCE_PAYLOAD_LENGTH_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_IKE_NONCE_PAYLOAD_LENGTH_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_IKE_NONCE_PAYLOAD_LENGTH_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"ike.nonce_payload_length\0".as_ptr() as *const libc::c_char,
         ALPROTO_IKE,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        1,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"ike.exchtype\0".as_ptr() as *const libc::c_char,
@@ -452,25 +450,27 @@ pub unsafe extern "C" fn SCDetectIkeRegister() {
         flags: SIGMATCH_INFO_UINT8,
     };
     G_IKE_EXCHTYPE_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_IKE_EXCHTYPE_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_IKE_EXCHTYPE_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"ike.exchtype\0".as_ptr() as *const libc::c_char,
         ALPROTO_IKE,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        1,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"ike.chosen_sa_attribute\0".as_ptr() as *const libc::c_char,
         desc: b"match IKE chosen SA Attribute\0".as_ptr() as *const libc::c_char,
-        url: b"/rules/ike-keywords.html#ike-chosen_sa_attribute\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/ike-keywords.html#ike-chosen-sa-attribute\0".as_ptr() as *const libc::c_char,
         AppLayerTxMatch: Some(ike_detect_chosen_sa_match),
         Setup: Some(ike_detect_chosen_sa_setup),
         Free: Some(ike_detect_chosen_sa_free),
         flags: 0,
     };
     G_IKE_CHOSEN_SA_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_IKE_CHOSEN_SA_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_IKE_CHOSEN_SA_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"ike.chosen_sa_attribute\0".as_ptr() as *const libc::c_char,
         ALPROTO_IKE,
         STREAM_TOCLIENT,
+        1,
     );
     let kw = SCSigTableAppLiteElmt {
         name: b"ike.key_exchange_payload_length\0".as_ptr() as *const libc::c_char,
@@ -483,15 +483,16 @@ pub unsafe extern "C" fn SCDetectIkeRegister() {
         flags: SIGMATCH_INFO_UINT32,
     };
     G_IKE_PAYLOAD_LEN_KW_ID = SCDetectHelperKeywordRegister(&kw);
-    G_IKE_PAYLOAD_LEN_BUFFER_ID = SCDetectHelperBufferRegister(
+    G_IKE_PAYLOAD_LEN_BUFFER_ID = SCDetectHelperBufferProgressRegister(
         b"ike.key_exchange_payload_length\0".as_ptr() as *const libc::c_char,
         ALPROTO_IKE,
         STREAM_TOSERVER | STREAM_TOCLIENT,
+        1,
     );
     let kw_initiator = SigTableElmtStickyBuffer {
         name: String::from("ike.init_spi"),
         desc: String::from("sticky buffer to match on the IKE spi initiator"),
-        url: String::from("/rules/ike-keywords.html#ike-init_spi"),
+        url: String::from("/rules/ike-keywords.html#ike-init-spi-ike-resp-spi"),
         setup: ike_spi_initiator_setup,
     };
     helper_keyword_register_sticky_buffer(&kw_initiator);
@@ -506,7 +507,7 @@ pub unsafe extern "C" fn SCDetectIkeRegister() {
     let kw_responder = SigTableElmtStickyBuffer {
         name: String::from("ike.resp_spi"),
         desc: String::from("sticky buffer to match on the IKE spi responder"),
-        url: String::from("/rules/ike-keywords.html#ike-resp_spi"),
+        url: String::from("/rules/ike-keywords.html#ike-init-spi-ike-resp-spi"),
         setup: ike_spi_responder_setup,
     };
     helper_keyword_register_sticky_buffer(&kw_responder);
@@ -521,7 +522,7 @@ pub unsafe extern "C" fn SCDetectIkeRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("ike.key_exchange_payload"),
         desc: String::from("sticky buffer to match on the IKE key_exchange_payload"),
-        url: String::from("/rules/ike-keywords.html#ike-key_exchange_payload"),
+        url: String::from("/rules/ike-keywords.html#ike-key-exchange-payload"),
         setup: ike_key_exchange_setup,
     };
     helper_keyword_register_sticky_buffer(&kw);

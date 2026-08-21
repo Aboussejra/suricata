@@ -73,8 +73,6 @@ typedef struct FlowWorkerThreadData_ {
 
     SC_ATOMIC_DECLARE(DetectEngineThreadCtxPtr, detect_thread);
 
-    SC_ATOMIC_DECLARE(bool, flush_ack);
-
     void *output_thread; /* Output thread data. */
     void *output_thread_flow; /* Output thread data. */
 
@@ -371,7 +369,7 @@ static inline void FlowWorkerStreamTCPUpdate(ThreadVars *tv, FlowWorkerThreadDat
     if (det_ctx != NULL && det_ctx->de_ctx->PreStreamHook != NULL) {
         const uint8_t action = det_ctx->de_ctx->PreStreamHook(tv, det_ctx, p);
         if (action & ACTION_DROP) {
-            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_STREAM_PRE_HOOK);
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FW_STREAM_PRE_HOOK);
             return;
         }
     }
@@ -429,7 +427,11 @@ static inline void FlowWorkerStreamTCPUpdate(ThreadVars *tv, FlowWorkerThreadDat
     }
     if (FlowChangeProto(p->flow) && p->flow->flags & FLOW_ACTION_DROP) {
         // in case f->flags & FLOW_ACTION_DROP was set by one of the dequeued packets
-        PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FLOW_DROP);
+        if (p->flow->flags & FLOW_ACTION_BY_FIREWALL) {
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FW_FLOW_DROP);
+        } else {
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FLOW_DROP);
+        }
     }
 }
 
@@ -567,20 +569,11 @@ static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data)
 
     SCLogDebug("packet %" PRIu64, PcapPacketCntGet(p));
 
-    if ((PKT_IS_FLUSHPKT(p))) {
-        SCLogDebug("thread %s flushing", tv->printable_name);
-        OutputLoggerFlush(tv, p, fw->output_thread);
-        /* Ack if a flush was requested */
-        bool notset = false;
-        SC_ATOMIC_CAS(&fw->flush_ack, notset, true);
-        return TM_ECODE_OK;
-    }
-
     /* handle Flow */
     if (det_ctx != NULL && det_ctx->de_ctx->PreFlowHook != NULL) {
         const uint8_t action = det_ctx->de_ctx->PreFlowHook(tv, det_ctx, p);
         if (action & ACTION_DROP) {
-            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FLOW_PRE_HOOK);
+            PacketDrop(p, ACTION_DROP, PKT_DROP_REASON_FW_FLOW_PRE_HOOK);
             goto pre_flow_drop;
         }
     }
@@ -757,18 +750,6 @@ void *FlowWorkerGetDetectCtxPtr(void *flow_worker)
 void *FlowWorkerGetThreadData(void *flow_worker)
 {
     return (FlowWorkerThreadData *)flow_worker;
-}
-
-bool FlowWorkerGetFlushAck(void *flow_worker)
-{
-    FlowWorkerThreadData *fw = flow_worker;
-    return SC_ATOMIC_GET(fw->flush_ack) == true;
-}
-
-void FlowWorkerSetFlushAck(void *flow_worker)
-{
-    FlowWorkerThreadData *fw = flow_worker;
-    SC_ATOMIC_SET(fw->flush_ack, false);
 }
 
 const char *ProfileFlowWorkerIdToString(enum ProfileFlowWorkerId fwi)

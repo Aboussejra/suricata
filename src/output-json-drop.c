@@ -90,7 +90,7 @@ static int DropLogJSON(ThreadVars *tv, JsonDropLogThread *aft, const Packet *p)
     JsonDropOutputCtx *drop_ctx = aft->drop_ctx;
 
     JsonAddrInfo addr = json_addr_info_zero;
-    JsonAddrInfoInit(p, LOG_DIR_PACKET, &addr);
+    JsonAddrInfoInit(p, LOG_DIR_PACKET, &addr, &drop_ctx->eve_ctx->cfg);
 
     SCJsonBuilder *js = CreateEveHeader(p, LOG_DIR_PACKET, "drop", &addr, drop_ctx->eve_ctx);
     if (unlikely(js == NULL))
@@ -129,12 +129,12 @@ static int DropLogJSON(ThreadVars *tv, JsonDropLogThread *aft, const Packet *p)
                 SCJbSetUint(js, "tcpseq", TCP_GET_RAW_SEQ(tcph));
                 SCJbSetUint(js, "tcpack", TCP_GET_RAW_ACK(tcph));
                 SCJbSetUint(js, "tcpwin", TCP_GET_RAW_WINDOW(tcph));
-                SCJbSetBool(js, "syn", TCP_ISSET_FLAG_RAW_SYN(tcph) ? true : false);
-                SCJbSetBool(js, "ack", TCP_ISSET_FLAG_RAW_ACK(tcph) ? true : false);
-                SCJbSetBool(js, "psh", TCP_ISSET_FLAG_RAW_PUSH(tcph) ? true : false);
-                SCJbSetBool(js, "rst", TCP_ISSET_FLAG_RAW_RST(tcph) ? true : false);
-                SCJbSetBool(js, "urg", TCP_ISSET_FLAG_RAW_URG(tcph) ? true : false);
-                SCJbSetBool(js, "fin", TCP_ISSET_FLAG_RAW_FIN(tcph) ? true : false);
+                SCJbSetBool(js, "syn", TCP_ISSET_FLAG_RAW_SYN(tcph));
+                SCJbSetBool(js, "ack", TCP_ISSET_FLAG_RAW_ACK(tcph));
+                SCJbSetBool(js, "psh", TCP_ISSET_FLAG_RAW_PUSH(tcph));
+                SCJbSetBool(js, "rst", TCP_ISSET_FLAG_RAW_RST(tcph));
+                SCJbSetBool(js, "urg", TCP_ISSET_FLAG_RAW_URG(tcph));
+                SCJbSetBool(js, "fin", TCP_ISSET_FLAG_RAW_FIN(tcph));
                 SCJbSetUint(js, "tcpres", TCP_GET_RAW_X2(tcph));
                 SCJbSetUint(js, "tcpurgp", TCP_GET_RAW_URG_POINTER(tcph));
             }
@@ -168,9 +168,8 @@ static int DropLogJSON(ThreadVars *tv, JsonDropLogThread *aft, const Packet *p)
     }
 
     if (aft->drop_ctx->flags & LOG_DROP_ALERTS) {
-        int logged = 0;
-        int i;
-        for (i = 0; i < p->alerts.cnt; i++) {
+        bool logged = false;
+        for (int i = 0; i < p->alerts.cnt; i++) {
             const PacketAlert *pa = &p->alerts.alerts[i];
             if (unlikely(pa->s == NULL)) {
                 continue;
@@ -179,15 +178,13 @@ static int DropLogJSON(ThreadVars *tv, JsonDropLogThread *aft, const Packet *p)
                ((pa->action & ACTION_DROP) && EngineModeIsIPS()))
             {
                 AlertJsonHeader(p, pa, js, 0, &addr, NULL);
-                logged = 1;
+                logged = true;
                 break;
             }
         }
-        if (logged == 0) {
-            if (p->alerts.drop.action != 0) {
-                const PacketAlert *pa = &p->alerts.drop;
-                AlertJsonHeader(p, pa, js, 0, &addr, NULL);
-            }
+        if (!logged && p->alerts.drop.action != 0) {
+            const PacketAlert *pa = &p->alerts.drop;
+            AlertJsonHeader(p, pa, js, 0, &addr, NULL);
         }
     }
 
@@ -296,8 +293,12 @@ static OutputInitResult JsonDropLogInitCtxSub(SCConfNode *conf, OutputCtx *paren
                              "'flow' are 'start' and 'all'");
             }
         }
+
         extended = SCConfNodeLookupChildValue(conf, "verdict");
-        if (extended != NULL) {
+
+        if (EngineModeIsFirewall()) {
+            drop_ctx->flags |= LOG_DROP_VERDICT;
+        } else if (extended != NULL) {
             if (SCConfValIsTrue(extended)) {
                 drop_ctx->flags |= LOG_DROP_VERDICT;
             }
@@ -392,7 +393,6 @@ void JsonDropLogRegister (void)
 {
     OutputPacketLoggerFunctions output_logger_functions = {
         .LogFunc = JsonDropLogger,
-        .FlushFunc = OutputJsonLogFlush,
         .ConditionFunc = JsonDropLogCondition,
         .ThreadInitFunc = JsonDropLogThreadInit,
         .ThreadDeinitFunc = JsonDropLogThreadDeinit,

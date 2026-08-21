@@ -39,7 +39,7 @@ const char *SCConfigGetLogDirectory(void)
 {
     const char *log_dir = NULL;
 
-    if (SCConfGet("default-log-dir", &log_dir) != 1) {
+    if (SCConfGetNonNull("default-log-dir", &log_dir) != 1) {
 #ifdef OS_WIN32
         log_dir = _getcwd(NULL, 0);
         if (log_dir == NULL) {
@@ -65,9 +65,14 @@ TmEcode ConfigCheckLogDirectoryExists(const char *log_dir)
 
 TmEcode ConfigSetDataDirectory(char *name)
 {
-    if (strlen(name) == 0)
+    size_t name_len = strlen(name);
+    if (name_len == 0)
         return TM_ECODE_OK;
 
+    if (name_len > PATH_MAX) {
+        SCLogError("Too long name for data directory");
+        return TM_ECODE_FAILED;
+    }
     size_t size = strlen(name) + 1;
     char tmp[size];
     strlcpy(tmp, name, size);
@@ -81,7 +86,7 @@ const char *ConfigGetDataDirectory(void)
 {
     const char *data_dir = NULL;
 
-    if (SCConfGet("default-data-dir", &data_dir) != 1) {
+    if (SCConfGetNonNull("default-data-dir", &data_dir) != 1) {
 #ifdef OS_WIN32
         data_dir = _getcwd(NULL, 0);
         if (data_dir == NULL) {

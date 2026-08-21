@@ -40,6 +40,9 @@
 #define HS_CACHE_FILE_VERSION "2"
 #define HS_CACHE_FILE_SUFFIX  "_v" HS_CACHE_FILE_VERSION ".hs"
 
+static SCMutex g_hs_ref_info_mutex = SCMUTEX_INITIALIZER;
+static char *g_hs_ref_info = NULL;
+
 static int16_t HSCacheConstructFPath(
         const char *dir_path, const char *db_hash, char *out_path, uint16_t out_path_size)
 {
@@ -120,6 +123,40 @@ static void SCHSCachePatternHash(const SCHSPattern *p, SCSha256 *sha256)
     SCSha256Update(sha256, (const uint8_t *)p->sids, p->sids_size * sizeof(SigIntId));
 }
 
+/**
+ * \brief Get the hs_database_info string for a reference BLOCK-mode database
+ * compiled with the current Hyperscan installation.
+ *
+ * Compiled lazily on the first call and cached. Thread-safe.
+ *
+ * \retval Pointer to info string, or NULL on failure. Do not free the ptr.
+ */
+static const char *HSGetReferenceDbInfo(void)
+{
+    if (g_hs_ref_info != NULL) {
+        return g_hs_ref_info;
+    }
+
+    hs_database_t *ref_db = NULL;
+    hs_compile_error_t *compile_err = NULL;
+    hs_error_t err = hs_compile("Suricata suricatta is the scientific name for the meerkat",
+            HS_FLAG_SINGLEMATCH, HS_MODE_BLOCK, NULL, &ref_db, &compile_err);
+    if (err == HS_SUCCESS && ref_db != NULL) {
+        if (hs_database_info(ref_db, &g_hs_ref_info) != HS_SUCCESS) {
+            if (g_hs_ref_info)
+                SCFree(g_hs_ref_info);
+            g_hs_ref_info = NULL;
+        }
+        hs_free_database(ref_db);
+    }
+    if (compile_err != NULL) {
+        SCLogInfo("Failed to compile reference Hyperscan database: %s", compile_err->message);
+        hs_free_compile_error(compile_err);
+    }
+
+    return g_hs_ref_info;
+}
+
 int HSLoadCache(hs_database_t **hs_db, const char *hs_db_hash, const char *dirpath)
 {
     char hash_file_static[PATH_MAX];
@@ -133,38 +170,59 @@ int HSLoadCache(hs_database_t **hs_db, const char *hs_db_hash, const char *dirpa
     if (!SCPathExists(hash_file_static))
         return -1;
 
-    FILE *db_cache = fopen(hash_file_static, "r");
+    char *db_info = NULL;
     char *buffer = NULL;
-    if (db_cache) {
-        size_t buffer_size;
-        buffer = HSReadStream(hash_file_static, &buffer_size);
-        if (!buffer) {
-            SCLogWarning("Hyperscan cached DB file %s cannot be read", hash_file_static);
-            ret = -1;
-            goto freeup;
-        }
+    size_t buffer_size;
+    buffer = HSReadStream(hash_file_static, &buffer_size);
+    if (!buffer) {
+        SCLogWarning("Hyperscan cached DB file %s cannot be read", hash_file_static);
+        return -1;
+    }
 
-        hs_error_t error = hs_deserialize_database(buffer, buffer_size, hs_db);
-        if (error != HS_SUCCESS) {
-            SCLogWarning("Failed to deserialize Hyperscan database of %s: %s", hash_file_static,
-                    HSErrorToStr(error));
-            ret = -1;
-            goto freeup;
-        }
-
-        ret = 0;
-        /* Touch file to update modification time so active caches are retained. */
-        if (SCTouchFile(hash_file_static) != 0) {
-            SCLogDebug("Failed to update mtime for %s", hash_file_static);
-        }
+    hs_error_t error = hs_deserialize_database(buffer, buffer_size, hs_db);
+    if (error != HS_SUCCESS) {
+        SCLogWarning("Failed to deserialize Hyperscan database of %s: %s", hash_file_static,
+                HSErrorToStr(error));
+        ret = -1;
         goto freeup;
     }
 
+    // Verify the loaded database is compatible with the current Hyperscan
+    // If both the loaded DB and the reference DB fail to load, consider the cache.
+    SCMutexLock(&g_hs_ref_info_mutex);
+    const char *ref_info = HSGetReferenceDbInfo();
+    if (ref_info != NULL) {
+        if (hs_database_info(*hs_db, &db_info) != HS_SUCCESS || db_info == NULL) {
+            SCLogDebug("Failed to query info for loaded Hyperscan database %s: %s",
+                    hash_file_static, HSErrorToStr(error));
+            ret = -1;
+            SCMutexUnlock(&g_hs_ref_info_mutex);
+            goto freeup;
+        }
+        if (strcmp(db_info, ref_info) != 0) {
+            SCLogDebug("Loaded Hyperscan database %s is incompatible with the current "
+                       "Hyperscan installation and will be ignored",
+                    hash_file_static);
+            ret = -1;
+            SCMutexUnlock(&g_hs_ref_info_mutex);
+            goto freeup;
+        }
+    }
+    SCMutexUnlock(&g_hs_ref_info_mutex);
+    ret = 0;
+    /* Touch file to update modification time so active caches are retained. */
+    if (SCTouchFile(hash_file_static) != 0) {
+        SCLogDebug("Failed to update mtime for %s", hash_file_static);
+    }
+
 freeup:
-    if (db_cache)
-        fclose(db_cache);
-    if (buffer)
-        SCFree(buffer);
+    if (ret != 0 && *hs_db != NULL) {
+        hs_free_database(*hs_db);
+        *hs_db = NULL;
+    }
+    if (db_info)
+        SCFree(db_info);
+    SCFree(buffer);
     return ret;
 }
 
@@ -198,7 +256,7 @@ static int HSSaveCache(hs_database_t *hs_db, const char *hs_db_hash, const char 
                 hash_file_static);
     }
 
-    FILE *db_cache_out = fopen(hash_file_static, "w");
+    FILE *db_cache_out = fopen(hash_file_static, "wb");
     if (!db_cache_out) {
         if (!notified) {
             SCLogWarning("Failed to create Hyperscan cache file, make sure the folder exist and is "
@@ -210,14 +268,11 @@ static int HSSaveCache(hs_database_t *hs_db, const char *hs_db_hash, const char 
         goto cleanup;
     }
     size_t r = fwrite(db_stream, sizeof(db_stream[0]), db_size, db_cache_out);
-    if (r > 0 && (size_t)r != db_size) {
+    if (r != db_size) {
         SCLogWarning("Failed to write to file: %s", hash_file_static);
-        if (r != db_size) {
-            // possibly a corrupted DB cache was created
-            r = remove(hash_file_static);
-            if (r != 0) {
-                SCLogWarning("Failed to remove corrupted cache file: %s", hash_file_static);
-            }
+        // possibly a corrupted DB cache was created
+        if (remove(hash_file_static) != 0) {
+            SCLogWarning("Failed to remove corrupted cache file: %s", hash_file_static);
         }
     }
     ret = fclose(db_cache_out);
@@ -239,12 +294,20 @@ int HSHashDb(const PatternDatabase *pd, char *hash, size_t hash_len)
         SCLogDebug("sha256 hashing failed");
         return -1;
     }
+
+    SCMutexLock(&g_hs_ref_info_mutex);
+    const char *ref_info = HSGetReferenceDbInfo();
+    if (ref_info != NULL) {
+        SCSha256Update(hasher, (const uint8_t *)ref_info, (uint32_t)strlen(ref_info));
+    }
+    SCMutexUnlock(&g_hs_ref_info_mutex);
+
     SCSha256Update(hasher, (const uint8_t *)&pd->pattern_cnt, sizeof(pd->pattern_cnt));
     for (uint32_t i = 0; i < pd->pattern_cnt; i++) {
         SCHSCachePatternHash(pd->parray[i], hasher);
     }
 
-    if (!SCSha256FinalizeToHex(hasher, hash, hash_len)) {
+    if (!SCSha256FinalizeToHex(hasher, hash, (uint32_t)hash_len)) {
         hasher = NULL;
         SCLogDebug("sha256 hashing failed");
         return -1;
@@ -334,11 +397,7 @@ static bool HSPruneFileByVersion(const char *filename)
     }
 
     const char *underscore = strrchr(filename, '_');
-    if (underscore == NULL || strcmp(underscore, HS_CACHE_FILE_SUFFIX) != 0) {
-        return true;
-    }
-
-    return false;
+    return underscore == NULL || strcmp(underscore, HS_CACHE_FILE_SUFFIX) != 0;
 }
 
 int SCHSCachePruneEvaluate(MpmConfig *mpm_conf, HashTable *inuse_caches)
@@ -362,7 +421,7 @@ int SCHSCachePruneEvaluate(MpmConfig *mpm_conf, HashTable *inuse_caches)
 
     struct dirent *ent;
     char path[PATH_MAX];
-    uint32_t considered = 0, removed = 0;
+    uint32_t considered = 0, removed_by_age = 0, removed_by_version = 0;
     const time_t cutoff = now - (time_t)mpm_conf->cache_max_age_seconds;
     while ((ent = readdir(dir)) != NULL) {
         const char *name = ent->d_name;
@@ -399,7 +458,10 @@ int SCHSCachePruneEvaluate(MpmConfig *mpm_conf, HashTable *inuse_caches)
         /* coverity[toctou] */
         int ret = unlink(path);
         if (ret == 0 || (ret == -1 && errno == ENOENT)) {
-            removed++;
+            if (prune_by_version)
+                removed_by_version++;
+            else if (prune_by_age)
+                removed_by_age++;
             SCLogDebug("File %s removed because of %s%s%s", path, prune_by_age ? "age" : "",
                     prune_by_age && prune_by_version ? " and " : "",
                     prune_by_version ? "incompatible version" : "");
@@ -411,7 +473,8 @@ int SCHSCachePruneEvaluate(MpmConfig *mpm_conf, HashTable *inuse_caches)
 
     PatternDatabaseCache *pd_cache_stats = mpm_conf->cache_stats;
     if (pd_cache_stats) {
-        pd_cache_stats->hs_dbs_cache_pruned_cnt = removed;
+        pd_cache_stats->hs_dbs_cache_pruned_by_age_cnt = removed_by_age;
+        pd_cache_stats->hs_dbs_cache_pruned_by_version_cnt = removed_by_version;
         pd_cache_stats->hs_dbs_cache_pruned_considered_cnt = considered;
         pd_cache_stats->hs_dbs_cache_pruned_cutoff = cutoff;
         pd_cache_stats->cache_max_age_seconds = mpm_conf->cache_max_age_seconds;
@@ -448,17 +511,23 @@ void SCHSCacheStatsPrint(void *data)
     }
 
     if (pd_cache_stats->hs_cacheable_dbs_cnt) {
-        SCLogInfo("Rule group caching - loaded: %u newly cached: %u total cacheable: %u",
+        SCLogPerf("rule group caching - loaded: %u newly cached: %u total cacheable: %u",
                 pd_cache_stats->hs_dbs_cache_loaded_cnt, pd_cache_stats->hs_dbs_cache_saved_cnt,
                 pd_cache_stats->hs_cacheable_dbs_cnt);
     }
     if (pd_cache_stats->hs_dbs_cache_pruned_considered_cnt) {
-        SCLogInfo("Rule group cache pruning removed %u/%u of HS caches due to "
-                  "version-incompatibility (not v%s) or "
-                  "age (older than %s)",
-                pd_cache_stats->hs_dbs_cache_pruned_cnt,
-                pd_cache_stats->hs_dbs_cache_pruned_considered_cnt, HS_CACHE_FILE_VERSION,
-                time_str);
+        if (pd_cache_stats->hs_dbs_cache_pruned_by_version_cnt) {
+            SCLogInfo("rule group cache pruning removed %u/%u of HS caches due to "
+                      "version-incompatibility (not v%s)",
+                    pd_cache_stats->hs_dbs_cache_pruned_by_version_cnt,
+                    pd_cache_stats->hs_dbs_cache_pruned_considered_cnt, HS_CACHE_FILE_VERSION);
+        }
+        if (pd_cache_stats->hs_dbs_cache_pruned_by_age_cnt) {
+            SCLogInfo("rule group cache pruning removed %u/%u of HS caches due to "
+                      "age (older than %s)",
+                    pd_cache_stats->hs_dbs_cache_pruned_by_age_cnt,
+                    pd_cache_stats->hs_dbs_cache_pruned_considered_cnt, time_str);
+        }
     }
 }
 
@@ -469,6 +538,16 @@ void SCHSCacheStatsDeinit(void *data)
     }
     PatternDatabaseCache *pd_cache_stats = (PatternDatabaseCache *)data;
     SCFree(pd_cache_stats);
+}
+
+void SCHSCacheDeinit(void)
+{
+    SCMutexLock(&g_hs_ref_info_mutex);
+    if (g_hs_ref_info != NULL) {
+        SCFree(g_hs_ref_info);
+        g_hs_ref_info = NULL;
+    }
+    SCMutexUnlock(&g_hs_ref_info_mutex);
 }
 
 #endif /* BUILD_HYPERSCAN */

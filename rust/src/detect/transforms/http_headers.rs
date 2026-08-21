@@ -54,7 +54,7 @@ fn header_lowertransform_do(input: &[u8], output: &mut [u8]) {
 }
 
 unsafe extern "C" fn header_lowertransform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *const c_void,
 ) {
     let input = (*buffer).inspect;
     let input_len = (*buffer).inspect_len;
@@ -80,7 +80,7 @@ pub unsafe extern "C" fn DetectTransformHeaderLowercaseRegister() {
     let kw = SCTransformTableElmt {
         name: b"header_lowercase\0".as_ptr() as *const libc::c_char,
         desc: b"modify buffer via lowercaseing header names\0".as_ptr() as *const libc::c_char,
-        url: b"/rules/transforms.html#header_lowercase\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/transforms.html#header-lowercase\0".as_ptr() as *const libc::c_char,
         Setup: Some(header_lowersetup),
         flags: SIGMATCH_NOOPT,
         Transform: Some(header_lowertransform),
@@ -119,7 +119,7 @@ fn strip_pseudo_transform_do(input: &[u8], output: &mut [u8]) -> u32 {
 }
 
 unsafe extern "C" fn strip_pseudo_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *const c_void,
 ) {
     let input = (*buffer).inspect;
     let input_len = (*buffer).inspect_len;
@@ -145,7 +145,7 @@ pub unsafe extern "C" fn DetectTransformStripPseudoHeadersRegister() {
     let kw = SCTransformTableElmt {
         name: b"strip_pseudo_headers\0".as_ptr() as *const libc::c_char,
         desc: b"modify buffer via stripping pseudo headers\0".as_ptr() as *const libc::c_char,
-        url: b"/rules/transforms.html#strip_pseudo_headers\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/transforms.html#strip-pseudo-headers\0".as_ptr() as *const libc::c_char,
         Setup: Some(strip_pseudo_setup),
         flags: SIGMATCH_NOOPT,
         Transform: Some(strip_pseudo_transform),

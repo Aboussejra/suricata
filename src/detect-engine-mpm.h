@@ -41,7 +41,7 @@ uint32_t PatternStrength(uint8_t *, uint16_t);
 uint8_t PatternMatchDefaultMatcher(void);
 
 void PatternMatchPrepare(MpmCtx *, uint16_t);
-void PatternMatchThreadPrepare(MpmThreadCtx *, uint16_t type);
+void PatternMatchThreadPrepare(MpmThreadCtx *, DetectEngineCtx *);
 
 void PatternMatchDestroy(MpmCtx *, uint16_t);
 void PatternMatchThreadDestroy(MpmThreadCtx *mpm_thread_ctx, uint16_t);
@@ -86,13 +86,20 @@ typedef int (*PrefilterRegisterFunc)(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
  */
 void DetectAppLayerMpmRegister(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionBufferGetDataPtr GetData,
-        AppProto alproto, int tx_min_progress);
+        AppProto alproto, uint8_t tx_min_progress);
+void DetectAppLayerMpmRegisterSubState(const char *name, int direction, int priority,
+        PrefilterRegisterFunc PrefilterRegister, InspectionBufferGetDataPtr GetData,
+        AppProto alproto, uint8_t sub_state, uint8_t tx_min_progress);
 void DetectAppLayerMpmRegisterSingle(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionSingleBufferGetDataPtr GetData,
-        AppProto alproto, int tx_min_progress);
+        AppProto alproto, uint8_t tx_min_progress);
 void DetectAppLayerMpmMultiRegister(const char *name, int direction, int priority,
         PrefilterRegisterFunc PrefilterRegister, InspectionMultiBufferGetDataPtr GetData,
-        AppProto alproto, int tx_min_progress);
+        AppProto alproto, uint8_t tx_min_progress);
+/** As DetectAppLayerMpmMultiRegister, but with a sub state argument */
+void DetectAppLayerMpmMultiRegisterSubState(const char *name, int direction, int priority,
+        PrefilterRegisterFunc PrefilterRegister, InspectionMultiBufferGetDataPtr GetData,
+        AppProto alproto, uint8_t sub_state, uint8_t tx_min_progress);
 void DetectAppLayerMpmRegisterByParentId(
         DetectEngineCtx *de_ctx,
         const int id, const int parent_id,

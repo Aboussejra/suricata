@@ -20,8 +20,8 @@ use crate::detect::SIGMATCH_OPTIONAL_OPT;
 use flate2::bufread::{GzDecoder, ZlibDecoder};
 use suricata_sys::sys::{
     DetectEngineCtx, DetectEngineThreadCtx, InspectionBuffer, SCDetectHelperTransformRegister,
-    SCDetectSignatureAddTransform, SCInspectionBufferCheckAndExpand, SCInspectionBufferTruncate,
-    SCTransformTableElmt, Signature,
+    SCDetectSignatureAddTransform, SCInspectionBufferCheckAndExpand, SCInspectionBufferInPlace,
+    SCInspectionBufferTruncate, SCTransformTableElmt, Signature,
 };
 
 use std::ffi::CStr;
@@ -43,7 +43,7 @@ const ABSOLUTE_MAX_SIZE: u32 = 16 * 1024 * 1024;
 fn decompress_parse_do(s: &str) -> Option<DetectTransformDecompressData> {
     let mut max_size_parsed = None;
     for p in s.split(',') {
-        let kv: Vec<&str> = p.split('=').collect();
+        let kv: Vec<&str> = p.split(' ').collect();
         if kv.len() != 2 {
             SCLogError!("Bad key value for decompress transform {}", p);
             return None;
@@ -132,26 +132,27 @@ unsafe fn decompress_transform(
     if input.is_null() || input_len == 0 {
         return;
     }
-    let input = build_slice!(input, input_len as usize);
+    let tmp;
+    let slice_input = if SCInspectionBufferInPlace(buffer) {
+        // need a temporary buffer as we cannot do the transfom in place
+        // rather copy the input which should be smaller than the decompressed output
+        // (Transform is tried in place when there are multiple chained transforms)
+        // needs to happen before possible realloc in SCInspectionBufferCheckAndExpand
+        tmp = build_slice!(input, input_len as usize).to_vec();
+        &tmp
+    } else {
+        build_slice!(input, input_len as usize)
+    };
+
     let output = SCInspectionBufferCheckAndExpand(buffer, ctx.max_size);
     if output.is_null() {
         // allocation failure
         return;
     }
     let buf = std::slice::from_raw_parts_mut(output, ctx.max_size as usize);
-    let mut tmp = Vec::new();
-    let input = if std::ptr::eq(output, input.as_ptr()) {
-        // need a temporary buffer as we cannot do the transfom in place
-        // rather copy the input which should be smaller than the decompressed output
-        // (Transform is tried in place when there are multiple chaines transforms)
-        tmp.extend_from_slice(input);
-        &tmp
-    } else {
-        input
-    };
 
     //  this succeeds if decompressed data > max_size, but we get nb = max_size
-    if let Some(nb) = decompress_fn(input, buf) {
+    if let Some(nb) = decompress_fn(slice_input, buf) {
         SCInspectionBufferTruncate(buffer, nb);
     } else {
         // decompression failure
@@ -160,7 +161,7 @@ unsafe fn decompress_transform(
 }
 
 unsafe extern "C" fn gunzip_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, ctx: *const c_void,
 ) {
     let ctx = cast_pointer!(ctx, DetectTransformDecompressData);
     decompress_transform(buffer, ctx, gunzip_transform_do);
@@ -170,7 +171,7 @@ unsafe extern "C" fn decompress_free(_de: *mut DetectEngineCtx, ctx: *mut c_void
     std::mem::drop(Box::from_raw(ctx as *mut DetectTransformDecompressData));
 }
 
-unsafe extern "C" fn decompress_id(data: *mut *const u8, length: *mut u32, ctx: *mut c_void) {
+unsafe extern "C" fn decompress_id(data: *mut *const u8, length: *mut u32, ctx: *const c_void) {
     if data.is_null() || length.is_null() || ctx.is_null() {
         return;
     }
@@ -202,7 +203,7 @@ fn zlib_deflate_transform_do(input: &[u8], output: &mut [u8]) -> Option<u32> {
 }
 
 unsafe extern "C" fn zlib_deflate_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, ctx: *const c_void,
 ) {
     let ctx = cast_pointer!(ctx, DetectTransformDecompressData);
     decompress_transform(buffer, ctx, zlib_deflate_transform_do);
@@ -234,7 +235,7 @@ pub unsafe extern "C" fn DetectTransformZlibDeflateRegister() {
     let kw = SCTransformTableElmt {
         name: b"zlib_deflate\0".as_ptr() as *const libc::c_char,
         desc: b"modify buffer via zlib decompression\0".as_ptr() as *const libc::c_char,
-        url: b"/rules/transforms.html#zlib_deflate\0".as_ptr() as *const libc::c_char,
+        url: b"/rules/transforms.html#zlib-deflate\0".as_ptr() as *const libc::c_char,
         Setup: Some(zlib_deflate_setup),
         flags: SIGMATCH_OPTIONAL_OPT,
         Transform: Some(zlib_deflate_transform),
@@ -257,12 +258,12 @@ mod tests {
     #[test]
     fn test_decompress_parse() {
         assert!(decompress_parse_do("keywithoutvalue").is_none());
-        assert!(decompress_parse_do("unknown=1").is_none());
-        assert!(decompress_parse_do("max-size=0").is_none());
-        assert!(decompress_parse_do("max-size=1,max-size=1").is_none());
-        assert!(decompress_parse_do("max-size=toto").is_none());
+        assert!(decompress_parse_do("unknown 1").is_none());
+        assert!(decompress_parse_do("max-size 0").is_none());
+        assert!(decompress_parse_do("max-size 1,max-size 1").is_none());
+        assert!(decompress_parse_do("max-size toto").is_none());
         assert_eq!(
-            decompress_parse_do("max-size=1MiB"),
+            decompress_parse_do("max-size 1MiB"),
             Some(DetectTransformDecompressData {
                 max_size: 1024 * 1024
             })

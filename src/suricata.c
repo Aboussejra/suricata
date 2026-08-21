@@ -181,7 +181,7 @@ static enum EngineMode g_engine_mode = ENGINE_MODE_UNKNOWN;
 
 /** Host mode: set if box is sniffing only
  * or is a router */
-uint8_t host_mode = SURI_HOST_IS_SNIFFER_ONLY;
+enum EngineHostMode g_engine_host_mode = ENGINE_HOST_IS_SNIFFER_ONLY;
 
 /** Maximum packets to simultaneously process. */
 uint32_t max_pending_packets;
@@ -255,19 +255,37 @@ int EngineModeIsIDS(void)
     return (g_engine_mode == ENGINE_MODE_IDS);
 }
 
-void EngineModeSetFirewall(void)
+void EngineModeSetFirewall(const enum EngineHostMode mode)
 {
+    g_engine_host_mode = mode;
     g_engine_mode = ENGINE_MODE_FIREWALL;
 }
 
-void EngineModeSetIPS(void)
+void EngineModeSetIPS(const enum EngineHostMode mode)
 {
-    g_engine_mode = ENGINE_MODE_IPS;
+    g_engine_host_mode = mode;
+#ifndef UNITTESTS
+    if (g_engine_mode == ENGINE_MODE_UNKNOWN)
+        g_engine_mode = ENGINE_MODE_IPS;
+#else
+    if (RunmodeIsUnittests() || g_engine_mode == ENGINE_MODE_UNKNOWN)
+        g_engine_mode = ENGINE_MODE_IPS;
+#endif
 }
 
 void EngineModeSetIDS(void)
 {
     g_engine_mode = ENGINE_MODE_IDS;
+}
+
+bool EngineHostModeIsSniffer(void)
+{
+    return (g_engine_host_mode == ENGINE_HOST_IS_SNIFFER_ONLY);
+}
+
+bool EngineHostModeIsBridge(void)
+{
+    return (g_engine_host_mode == ENGINE_HOST_IS_BRIDGE);
 }
 
 #ifdef UNITTESTS
@@ -565,6 +583,7 @@ static void SetBpfStringFromFile(char *filename)
         exit(EXIT_FAILURE);
     }
     fclose(fp);
+    DEBUG_VALIDATE_BUG_ON(nm >= bpf_len); // help scan-build
     bpf_filter[nm] = '\0';
 
     if(strlen(bpf_filter) > 0) {
@@ -638,6 +657,7 @@ static void PrintUsage(const char *progname)
     printf("\t--runmode <runmode_id>               : specific runmode modification the engine should run.  The argument\n"
            "\t                                       supplied should be the id for the runmode obtained by running\n"
            "\t                                       --list-runmodes\n");
+    printf("\t--plugin <path>                      : load plugin in addition to config\n");
 
     printf("\n  Capture and IPS:\n");
 
@@ -821,6 +841,9 @@ static void PrintBuildInfo(void)
 #ifdef PROFILING
     strlcat(features, "PROFILING ", sizeof(features));
 #endif
+#ifdef HAVE_PACKET_EBPF
+    strlcat(features, "EBPF ", sizeof(features));
+#endif
 #ifdef PROFILE_LOCKING
     strlcat(features, "PROFILE_LOCKING ", sizeof(features));
 #endif
@@ -841,6 +864,9 @@ static void PrintBuildInfo(void)
     strlcat(features, "RUST ", sizeof(features));
 #if defined(SC_ADDRESS_SANITIZER)
     strlcat(features, "ASAN ", sizeof(features));
+#endif
+#if defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    strlcat(features, "FUZZ ", sizeof(features));
 #endif
 #if defined(HAVE_POPCNT64)
     strlcat(features, "POPCNT64 ", sizeof(features));
@@ -1373,9 +1399,39 @@ static int ParseCommandLinePcapLive(SCInstance *suri, const char *in_arg)
  */
 static bool IsLogDirectoryWritable(const char* str)
 {
-    if (access(str, W_OK) == 0)
-        return true;
-    return false;
+    return access(str, W_OK) == 0;
+}
+
+/**
+ * Helper functions to append option values to an array where the
+ * option is allowed multiple times.  For example:
+ *   - --include
+ *   - --plugin
+ */
+static void AddCommandLineOptionValue(
+        const char ***values, const char *value, const char *description)
+{
+    if (*values == NULL) {
+        *values = SCCalloc(2, sizeof(char *));
+        if (*values == NULL) {
+            FatalError("Failed to allocate memory for %s: %s", description, strerror(errno));
+        }
+        (*values)[0] = value;
+    } else {
+        for (int i = 0;; i++) {
+            if ((*values)[i] == NULL) {
+                const char **new_values = SCRealloc(*values, (i + 2) * sizeof(char *));
+                if (new_values == NULL) {
+                    FatalError(
+                            "Failed to allocate memory for %s: %s", description, strerror(errno));
+                }
+                *values = new_values;
+                (*values)[i] = value;
+                (*values)[i + 1] = NULL;
+                break;
+            }
+        }
+    }
 }
 
 extern int g_skip_prefilter;
@@ -1430,6 +1486,7 @@ TmEcode SCParseCommandLine(int argc, char **argv)
         {"no-random", 0, &g_disable_randomness, 1},
         {"strict-rule-keywords", optional_argument, 0, 0},
 
+        {"plugin", required_argument, 0, 0},
         {"capture-plugin", required_argument, 0, 0},
         {"capture-plugin-args", required_argument, 0, 0},
 
@@ -1546,6 +1603,8 @@ TmEcode SCParseCommandLine(int argc, char **argv)
                            "to pass --enable-pfring to configure when building.");
                 return TM_ECODE_FAILED;
 #endif /* HAVE_PFRING */
+            } else if (strcmp((long_opts[option_index]).name, "plugin") == 0) {
+                AddCommandLineOptionValue(&suri->additional_plugins, optarg, "additional plugins");
             } else if (strcmp((long_opts[option_index]).name, "capture-plugin") == 0) {
                 suri->run_mode = RUNMODE_PLUGIN;
                 suri->capture_plugin_name = optarg;
@@ -1607,7 +1666,7 @@ TmEcode SCParseCommandLine(int argc, char **argv)
                 }
             } else if (strcmp((long_opts[option_index]).name, "simulate-ips") == 0) {
                 SCLogInfo("Setting IPS mode");
-                EngineModeSetIPS();
+                EngineModeSetIPS(ENGINE_HOST_IS_ROUTER);
             } else if (strcmp((long_opts[option_index]).name, "init-errors-fatal") == 0) {
                 if (SCConfSetFinal("engine.init-failure-fatal", "1") != 1) {
                     SCLogError("failed to set engine init-failure-fatal");
@@ -1866,32 +1925,8 @@ TmEcode SCParseCommandLine(int argc, char **argv)
                     FatalError("failed to duplicate 'strict' string");
                 }
             } else if (strcmp((long_opts[option_index]).name, "include") == 0) {
-                if (suri->additional_configs == NULL) {
-                    suri->additional_configs = SCCalloc(2, sizeof(char *));
-                    if (suri->additional_configs == NULL) {
-                        FatalError(
-                                "Failed to allocate memory for additional configuration files: %s",
-                                strerror(errno));
-                    }
-                    suri->additional_configs[0] = optarg;
-                } else {
-                    for (int i = 0;; i++) {
-                        if (suri->additional_configs[i] == NULL) {
-                            const char **additional_configs =
-                                    SCRealloc(suri->additional_configs, (i + 2) * sizeof(char *));
-                            if (additional_configs == NULL) {
-                                FatalError("Failed to allocate memory for additional configuration "
-                                           "files: %s",
-                                        strerror(errno));
-                            } else {
-                                suri->additional_configs = additional_configs;
-                            }
-                            suri->additional_configs[i] = optarg;
-                            suri->additional_configs[i + 1] = NULL;
-                            break;
-                        }
-                    }
-                }
+                AddCommandLineOptionValue(
+                        &suri->additional_configs, optarg, "additional configuration files");
             } else if (strcmp((long_opts[option_index]).name, "firewall-rules-exclusive") == 0) {
                 if (suri->firewall_rule_file != NULL) {
                     SCLogError("can't have multiple --firewall-rules-exclusive options");
@@ -1991,7 +2026,7 @@ TmEcode SCParseCommandLine(int argc, char **argv)
 #ifdef NFQ
             if (suri->run_mode == RUNMODE_UNKNOWN) {
                 suri->run_mode = RUNMODE_NFQ;
-                EngineModeSetIPS();
+                EngineModeSetIPS(ENGINE_HOST_IS_ROUTER);
                 if (NFQParseAndRegisterQueues(optarg) == -1)
                     return TM_ECODE_FAILED;
             } else if (suri->run_mode == RUNMODE_NFQ) {
@@ -2013,7 +2048,7 @@ TmEcode SCParseCommandLine(int argc, char **argv)
 #ifdef IPFW
             if (suri->run_mode == RUNMODE_UNKNOWN) {
                 suri->run_mode = RUNMODE_IPFW;
-                EngineModeSetIPS();
+                EngineModeSetIPS(ENGINE_HOST_IS_ROUTER);
                 if (IPFWRegisterQueue(optarg) == -1)
                     return TM_ECODE_FAILED;
             } else if (suri->run_mode == RUNMODE_IPFW) {
@@ -2208,7 +2243,7 @@ static int MayDaemonize(SCInstance *suri)
     if (suri->daemon == 1 && suri->pid_filename == NULL) {
         const char *pid_filename;
 
-        if (SCConfGet("pid-file", &pid_filename) == 1) {
+        if (SCConfGetNonNull("pid-file", &pid_filename) == 1) {
             SCLogInfo("Use pid file %s from config file.", pid_filename);
         } else {
             pid_filename = DEFAULT_PID_FILENAME;
@@ -2489,11 +2524,16 @@ int SCStartInternalRunMode(int argc, char **argv)
     return TM_ECODE_OK;
 }
 
-int SCFinalizeRunMode(void)
+int SCFinalizeRunMode(int argc)
 {
     SCInstance *suri = &suricata;
     switch (suri->run_mode) {
         case RUNMODE_UNKNOWN:
+            /* Only warn if user passed arguments */
+            if (argc > 1) {
+                SCLogError("Please specify a runmode or capture option. "
+                           "Use --list-runmodes to see available runmodes.");
+            }
             PrintUsage(suri->progname);
             return TM_ECODE_FAILED;
         default:
@@ -2568,7 +2608,7 @@ static int ConfigGetCaptureValue(SCInstance *suri)
     /* Pull the default packet size from the config, if not found fall
      * back on a sane default. */
     const char *temp_default_packet_size;
-    if ((SCConfGet("default-packet-size", &temp_default_packet_size)) != 1) {
+    if ((SCConfGetNonNull("default-packet-size", &temp_default_packet_size)) != 1) {
         int lthread;
         int nlive;
         int strip_trailing_plus = 0;
@@ -2705,28 +2745,40 @@ static void PostConfLoadedSetupHostMode(void)
 {
     const char *hostmode = NULL;
 
-    if (SCConfGet("host-mode", &hostmode) == 1) {
+    if (SCConfGetNonNull("host-mode", &hostmode) == 1) {
         if (!strcmp(hostmode, "router")) {
-            host_mode = SURI_HOST_IS_ROUTER;
+            g_engine_host_mode = ENGINE_HOST_IS_ROUTER;
+        } else if (!strcmp(hostmode, "bridge")) {
+            g_engine_host_mode = ENGINE_HOST_IS_BRIDGE;
         } else if (!strcmp(hostmode, "sniffer-only")) {
-            host_mode = SURI_HOST_IS_SNIFFER_ONLY;
+            g_engine_host_mode = ENGINE_HOST_IS_SNIFFER_ONLY;
         } else {
             if (strcmp(hostmode, "auto") != 0) {
                 WarnInvalidConfEntry("host-mode", "%s", "auto");
             }
             if (EngineModeIsIPS()) {
-                host_mode = SURI_HOST_IS_ROUTER;
+                /* only set if not already set by the runmode */
+                if (g_engine_host_mode == ENGINE_HOST_IS_SNIFFER_ONLY) {
+                    SCLogDebug("host mode set to %u setting to %u", g_engine_host_mode,
+                            ENGINE_HOST_IS_ROUTER);
+                    g_engine_host_mode = ENGINE_HOST_IS_ROUTER;
+                }
             } else {
-                host_mode = SURI_HOST_IS_SNIFFER_ONLY;
+                g_engine_host_mode = ENGINE_HOST_IS_SNIFFER_ONLY;
             }
         }
     } else {
         if (EngineModeIsIPS()) {
-            host_mode = SURI_HOST_IS_ROUTER;
-            SCLogInfo("No 'host-mode': suricata is in IPS mode, using "
-                      "default setting 'router'");
+            /* only set if not already set by the runmode */
+            if (g_engine_host_mode == ENGINE_HOST_IS_SNIFFER_ONLY) {
+                SCLogDebug("host mode set to %u setting to %u", g_engine_host_mode,
+                        ENGINE_HOST_IS_ROUTER);
+                g_engine_host_mode = ENGINE_HOST_IS_ROUTER;
+                SCLogInfo("No 'host-mode': suricata is in IPS mode, using "
+                          "default setting 'router'");
+            }
         } else {
-            host_mode = SURI_HOST_IS_SNIFFER_ONLY;
+            g_engine_host_mode = ENGINE_HOST_IS_SNIFFER_ONLY;
             SCLogInfo("No 'host-mode': suricata is in IDS mode, using "
                       "default setting 'sniffer-only'");
         }
@@ -2770,7 +2822,7 @@ int PostConfLoadedSetup(SCInstance *suri)
     }
     if (suri->is_firewall) {
         SCLogWarning("firewall mode is EXPERIMENTAL and subject to change");
-        EngineModeSetFirewall();
+        EngineModeSetFirewall(g_engine_host_mode);
     }
 
     /* load the pattern matchers */
@@ -2788,7 +2840,7 @@ int PostConfLoadedSetup(SCInstance *suri)
 
     if (suri->checksum_validation == -1) {
         const char *cv = NULL;
-        if (SCConfGet("capture.checksum-validation", &cv) == 1) {
+        if (SCConfGetNonNull("capture.checksum-validation", &cv) == 1) {
             if (strcmp(cv, "none") == 0) {
                 suri->checksum_validation = 0;
             } else if (strcmp(cv, "all") == 0) {
@@ -2809,7 +2861,7 @@ int PostConfLoadedSetup(SCInstance *suri)
         SCConfSet("runmode", suri->runmode_custom_mode);
     }
 
-    StorageInit();
+    SCStorageInit();
 #ifdef HAVE_PACKET_EBPF
     if (suri->run_mode == RUNMODE_AFP_DEV) {
         EBPFRegisterExtension();
@@ -2824,7 +2876,7 @@ int PostConfLoadedSetup(SCInstance *suri)
     SigTableInit();
 
 #ifdef HAVE_PLUGINS
-    SCPluginsLoad(suri->capture_plugin_name, suri->capture_plugin_args);
+    SCPluginsLoad(suri->capture_plugin_name, suri->capture_plugin_args, suri->additional_plugins);
 #endif
 
     LiveDeviceFinalize(); // must be after EBPF extension registration
@@ -2857,7 +2909,7 @@ int PostConfLoadedSetup(SCInstance *suri)
     /* Suricata will use this umask if provided. By default it will use the
        umask passed on from the shell. */
     const char *custom_umask;
-    if (SCConfGet("umask", &custom_umask) == 1) {
+    if (SCConfGetNonNull("umask", &custom_umask) == 1) {
         uint16_t mask;
         if (StringParseUint16(&mask, 8, (uint16_t)strlen(custom_umask), custom_umask) > 0) {
             umask((mode_t)mask);
@@ -2911,7 +2963,7 @@ int PostConfLoadedSetup(SCInstance *suri)
     RegisterAllModules();
     AppLayerHtpNeedFileInspection();
 
-    StorageFinalize();
+    SCStorageFinalize();
 
     TmModuleRunInit();
 
@@ -3043,6 +3095,8 @@ int InitGlobal(void)
 
 void SuricataPreInit(const char *progname)
 {
+    UtilCpuEnableSparcMisalignEmulation();
+
     SCInstanceInit(&suricata, progname);
 
     if (InitGlobal() != 0) {
@@ -3177,7 +3231,7 @@ void SuricataPostInit(void)
 #endif
 
     if (limit_nproc) {
-#if defined(HAVE_SYS_RESOURCE_H)
+#if defined(HAVE_SYS_RESOURCE_H) && defined(RLIMIT_NPROC)
 #ifdef linux
         if (geteuid() == 0) {
             SCLogWarning("setrlimit has no effect when running as root.");
@@ -3194,6 +3248,10 @@ void SuricataPostInit(void)
 
     SC_ATOMIC_SET(engine_stage, SURICATA_RUNTIME);
     PacketPoolPostRunmodes();
+
+    /* pledge before allowing threads to continue to avoid an issue with pcap file directory mode,
+     * see ticket #8300. */
+    SCPledge();
 
     /* Un-pause all the paused threads */
     TmThreadContinueThreads();
@@ -3214,5 +3272,4 @@ void SuricataPostInit(void)
         SystemHugepageSnapshotDestroy(prerun_snap);
         SystemHugepageSnapshotDestroy(postrun_snap);
     }
-    SCPledge();
 }

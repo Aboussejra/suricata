@@ -298,7 +298,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
         ALPROTO_SSH,
         STREAM_TOSERVER | STREAM_TOCLIENT,
         Some(SCSshTxGetSoftware),
-        SSHConnectionState::SshStateBannerDone as c_int,
+        SSHConnectionState::SshStateBannerDone as u8,
     );
     SCDetectHelperKeywordAliasRegister(
         ssh_software_kw_id,
@@ -340,7 +340,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
         ALPROTO_SSH,
         STREAM_TOSERVER | STREAM_TOCLIENT,
         Some(SCSshTxGetProtocol),
-        SSHConnectionState::SshStateBannerDone as c_int,
+        SSHConnectionState::SshStateBannerDone as u8,
     );
     SCDetectHelperKeywordAliasRegister(
         ssh_proto_kw_id,
@@ -350,7 +350,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("ssh.hassh.string"),
         desc: String::from("ssh.hassh.string sticky buffer"),
-        url: String::from("/rules/ssh-keywords.html#hassh.string"),
+        url: String::from("/rules/ssh-keywords.html#ssh-hassh-string"),
         setup: ssh_hassh_string_setup,
     };
     DETECT_SSH_HASSH_STRING = helper_keyword_register_sticky_buffer(&kw);
@@ -360,7 +360,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
         ALPROTO_SSH,
         STREAM_TOSERVER,
         Some(SCSshTxGetHasshString),
-        SSHConnectionState::SshStateBannerDone as c_int,
+        SSHConnectionState::SshStateBannerDone as u8,
     );
     SCDetectHelperKeywordAliasRegister(
         DETECT_SSH_HASSH_STRING,
@@ -370,7 +370,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("ssh.hassh.server.string"),
         desc: String::from("ssh.hassh.server.string sticky buffer"),
-        url: String::from("/rules/ssh-keywords.html#ssh.hassh.server.string"),
+        url: String::from("/rules/ssh-keywords.html#ssh-hassh-server-string"),
         setup: ssh_hassh_server_string_setup,
     };
     DETECT_SSH_HASSH_SERVER_STRING = helper_keyword_register_sticky_buffer(&kw);
@@ -380,7 +380,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
         ALPROTO_SSH,
         STREAM_TOCLIENT,
         Some(SCSshTxGetHasshString),
-        SSHConnectionState::SshStateBannerDone as c_int,
+        SSHConnectionState::SshStateBannerDone as u8,
     );
     SCDetectHelperKeywordAliasRegister(
         DETECT_SSH_HASSH_SERVER_STRING,
@@ -390,7 +390,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("ssh.hassh"),
         desc: String::from("ssh.hassh sticky buffer"),
-        url: String::from("/rules/ssh-keywords.html#hassh"),
+        url: String::from("/rules/ssh-keywords.html#ssh-hassh"),
         setup: ssh_hassh_setup,
     };
     DETECT_SSH_HASSH = helper_keyword_register_sticky_buffer(&kw);
@@ -400,7 +400,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
         ALPROTO_SSH,
         STREAM_TOSERVER,
         Some(SCSshTxGetHassh),
-        SSHConnectionState::SshStateBannerDone as c_int,
+        SSHConnectionState::SshStateBannerDone as u8,
     );
     SCDetectHelperKeywordAliasRegister(
         DETECT_SSH_HASSH,
@@ -411,7 +411,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
     let kw = SigTableElmtStickyBuffer {
         name: String::from("ssh.hassh.server"),
         desc: String::from("ssh.hassh.server sticky buffer"),
-        url: String::from("/rules/ssh-keywords.html#ssh.hassh.server"),
+        url: String::from("/rules/ssh-keywords.html#ssh-hassh-server"),
         setup: ssh_hassh_server_setup,
     };
     DETECT_SSH_HASSH_SERVER = helper_keyword_register_sticky_buffer(&kw);
@@ -421,7 +421,7 @@ pub unsafe extern "C" fn SCDetectSshRegister() {
         ALPROTO_SSH,
         STREAM_TOCLIENT,
         Some(SCSshTxGetHassh),
-        SSHConnectionState::SshStateBannerDone as c_int,
+        SSHConnectionState::SshStateBannerDone as u8,
     );
     SCDetectHelperKeywordAliasRegister(
         DETECT_SSH_HASSH_SERVER,

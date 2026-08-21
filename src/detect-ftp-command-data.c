@@ -44,7 +44,7 @@
 #include "detect-ftp-command-data.h"
 
 #define KEYWORD_NAME "ftp.command_data"
-#define KEYWORD_DOC  "ftp-keywords.html#ftp-command_data"
+#define KEYWORD_DOC  "ftp-keywords.html#ftp-command-data"
 #define BUFFER_NAME  "ftp.command_data"
 #define BUFFER_DESC  "ftp command_data"
 
@@ -94,14 +94,10 @@ void DetectFtpCommandDataRegister(void)
             "sticky buffer to match on the FTP command data buffer";
     sigmatch_table[DETECT_FTP_COMMAND_DATA].url = "/rules/" KEYWORD_DOC;
     sigmatch_table[DETECT_FTP_COMMAND_DATA].Setup = DetectFtpCommandDataSetup;
-    sigmatch_table[DETECT_FTP_COMMAND_DATA].flags |= SIGMATCH_NOOPT;
+    sigmatch_table[DETECT_FTP_COMMAND_DATA].flags |= SIGMATCH_NOOPT | SIGMATCH_SUPPORT_FIREWALL;
 
-    SCDetectHelperBufferMpmRegister(
-            BUFFER_NAME, BUFFER_DESC, ALPROTO_FTP, STREAM_TOSERVER, DetectFTPCommandDataGetData);
-
-    DetectBufferTypeSetDescriptionByName(BUFFER_NAME, BUFFER_DESC);
-
-    g_ftp_cmd_data_buffer_id = DetectBufferTypeGetByName(BUFFER_NAME);
+    g_ftp_cmd_data_buffer_id = SCDetectHelperBufferProgressMpmRegister(BUFFER_NAME, BUFFER_DESC,
+            ALPROTO_FTP, STREAM_TOSERVER, DetectFTPCommandDataGetData, FTP_STATE_FINISHED);
 
     SCLogDebug("registering " BUFFER_NAME " rule option");
 }

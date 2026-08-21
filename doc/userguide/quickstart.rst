@@ -48,6 +48,15 @@ Use that information to configure Suricata::
 
     sudo vim /etc/suricata/suricata.yaml
 
+.. note::
+
+    The location of ``suricata.yaml`` depends on how Suricata was installed.
+    Distribution packages (such as the PPA used above) install it to
+    ``/etc/suricata/suricata.yaml``. A build from source installs it under the
+    prefix passed to ``configure``, which defaults to ``/usr/local``, so the
+    file is at ``/usr/local/etc/suricata/suricata.yaml`` instead. See
+    :ref:`installation` for details.
+
 There are many possible configuration options, we focus on the setup of
 the ``HOME_NET`` variable and the network interface configuration. The
 ``HOME_NET`` variable should include, in most scenarios, the IP address of
@@ -120,7 +129,7 @@ Alerting
 To test the IDS functionality of Suricata it's best to test with a signature. The signature with
 ID ``2100498`` from the ET Open ruleset is written specific for such test cases.
 
-2100498::
+.. container:: example-rule
 
     alert ip any any -> any any (msg:"GPL ATTACK_RESPONSE id check returned root"; content:"uid=0|28|root|29|"; classtype:bad-unknown; sid:2100498; rev:7; metadata:created_at 2010_09_23, updated_at 2010_09_23;)
 

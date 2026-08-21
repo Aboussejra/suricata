@@ -3,7 +3,8 @@ if BUILD_FUZZTARGETS
     bin_PROGRAMS += fuzz_applayerprotodetectgetproto \
     fuzz_applayerparserparse fuzz_siginit \
     fuzz_confyamlloadstring fuzz_decodepcapfile \
-    fuzz_sigpcap fuzz_mimedecparseline fuzz_decodebase64
+    fuzz_sigpcap fuzz_mimedecparseline fuzz_decodebase64 \
+    fuzz_iprep
 if HAS_FUZZPCAP
     bin_PROGRAMS += fuzz_sigpcap_aware fuzz_predefpcap_aware
 endif
@@ -74,6 +75,7 @@ noinst_HEADERS = \
 	decode-gre.h \
 	decode-icmpv4.h \
 	decode-icmpv6.h \
+	decode-igmp.h \
 	decode-ipv4.h \
 	decode-ipv6.h \
 	decode-mpls.h \
@@ -116,9 +118,6 @@ noinst_HEADERS = \
 	detect-csum.h \
 	detect-datarep.h \
 	detect-dataset.h \
-	detect-dce-iface.h \
-	detect-dce-opnum.h \
-	detect-dce-stub-data.h \
 	detect-depth.h \
 	detect-detection-filter.h \
 	detect-distance.h \
@@ -135,7 +134,6 @@ noinst_HEADERS = \
 	detect-engine-buffer.h \
 	detect-engine-build.h \
 	detect-engine-content-inspection.h \
-	detect-engine-dcepayload.h \
 	detect-engine-event.h \
 	detect-engine-file.h \
 	detect-engine-frame.h \
@@ -159,6 +157,7 @@ noinst_HEADERS = \
 	detect-engine-uint.h \
 	detect-engine.h \
 	detect-entropy.h \
+	detect-etherhdr.h \
 	detect-fast-pattern.h \
 	detect-file-data.h \
 	detect-file-hash-common.h \
@@ -227,6 +226,13 @@ noinst_HEADERS = \
 	detect-icmpv6hdr.h \
 	detect-icode.h \
 	detect-id.h \
+	detect-igmphdr.h \
+	detect-igmp-type.h \
+	detect-sctphdr.h \
+	detect-sctp-chunk-cnt.h \
+	detect-sctp-chunk-type.h \
+	detect-sctp-chunk-data.h \
+	detect-sctp-vtag.h \
 	detect-ipaddr.h \
 	detect-ipopts.h \
 	detect-ipproto.h \
@@ -236,18 +242,12 @@ noinst_HEADERS = \
 	detect-isdataat.h \
 	detect-itype.h \
 	detect-ja4-hash.h \
-	detect-krb5-cname.h \
-	detect-krb5-errcode.h \
-	detect-krb5-sname.h \
-	detect-krb5-ticket-encryption.h \
 	detect-l3proto.h \
 	detect-lua-extensions.h \
 	detect-lua.h \
 	detect-mark.h \
 	detect-metadata.h \
-	detect-modbus.h \
 	detect-msg.h \
-	detect-nfs-version.h \
 	detect-noalert.h \
 	detect-nocase.h \
 	detect-offset.h \
@@ -281,7 +281,6 @@ noinst_HEADERS = \
 	detect-tcphdr.h \
 	detect-tcpmss.h \
 	detect-template.h \
-	detect-template2.h \
 	detect-threshold.h \
 	detect-tls-alpn.h \
 	detect-tls-cert-fingerprint.h \
@@ -338,9 +337,7 @@ noinst_HEADERS = \
 	ippair-storage.h \
 	ippair-timeout.h \
 	ippair.h \
-	log-cf-common.h \
-	log-flush.h \
-	log-httplog.h \
+	log-maintenance.h \
 	log-pcap.h \
 	log-stats.h \
 	log-tcp-data.h \
@@ -370,6 +367,7 @@ noinst_HEADERS = \
 	output-json-ftp.h \
 	output-json-http.h \
 	output-json-ike.h \
+	output-json-llmnr.h \
 	output-json-mdns.h \
 	output-json-metadata.h \
 	output-json-mqtt.h \
@@ -527,6 +525,7 @@ noinst_HEADERS = \
 	util-lua-http.h \
 	util-lua-ja3.h \
 	util-lua-log.h \
+	util-lua-ntp.h \
 	util-lua-packetlib.h \
 	util-lua-rule.h \
 	util-lua-sandbox.h \
@@ -651,6 +650,7 @@ libsuricata_c_a_SOURCES = \
 	decode-gre.c \
 	decode-icmpv4.c \
 	decode-icmpv6.c \
+	decode-igmp.c \
 	decode-ipv4.c \
 	decode-ipv6.c \
 	decode-mpls.c \
@@ -694,9 +694,6 @@ libsuricata_c_a_SOURCES = \
 	detect-csum.c \
 	detect-datarep.c \
 	detect-dataset.c \
-	detect-dce-iface.c \
-	detect-dce-opnum.c \
-	detect-dce-stub-data.c \
 	detect-depth.c \
 	detect-detection-filter.c \
 	detect-distance.c \
@@ -713,7 +710,6 @@ libsuricata_c_a_SOURCES = \
 	detect-engine-buffer.c \
 	detect-engine-build.c \
 	detect-engine-content-inspection.c \
-	detect-engine-dcepayload.c \
 	detect-engine-event.c \
 	detect-engine-file.c \
 	detect-engine-frame.c \
@@ -737,6 +733,7 @@ libsuricata_c_a_SOURCES = \
 	detect-engine-uint.c \
 	detect-engine.c \
 	detect-entropy.c \
+	detect-etherhdr.c \
 	detect-fast-pattern.c \
 	detect-file-data.c \
 	detect-file-hash-common.c \
@@ -804,6 +801,13 @@ libsuricata_c_a_SOURCES = \
 	detect-icmpv6hdr.c \
 	detect-icode.c \
 	detect-id.c \
+	detect-igmphdr.c \
+	detect-igmp-type.c \
+	detect-sctphdr.c \
+	detect-sctp-chunk-cnt.c \
+	detect-sctp-chunk-type.c \
+	detect-sctp-chunk-data.c \
+	detect-sctp-vtag.c \
 	detect-ipaddr.c \
 	detect-ipopts.c \
 	detect-ipproto.c \
@@ -813,18 +817,12 @@ libsuricata_c_a_SOURCES = \
 	detect-isdataat.c \
 	detect-itype.c \
 	detect-ja4-hash.c \
-	detect-krb5-cname.c \
-	detect-krb5-errcode.c \
-	detect-krb5-sname.c \
-	detect-krb5-ticket-encryption.c \
 	detect-l3proto.c \
 	detect-lua-extensions.c \
 	detect-lua.c \
 	detect-mark.c \
 	detect-metadata.c \
-	detect-modbus.c \
 	detect-msg.c \
-	detect-nfs-version.c \
 	detect-noalert.c \
 	detect-nocase.c \
 	detect-offset.c \
@@ -858,7 +856,6 @@ libsuricata_c_a_SOURCES = \
 	detect-tcphdr.c \
 	detect-tcpmss.c \
 	detect-template.c \
-	detect-template2.c \
 	detect-threshold.c \
 	detect-tls-alpn.c \
 	detect-tls-cert-fingerprint.c \
@@ -912,9 +909,7 @@ libsuricata_c_a_SOURCES = \
 	ippair-storage.c \
 	ippair-timeout.c \
 	ippair.c \
-	log-cf-common.c \
-	log-flush.c \
-	log-httplog.c \
+	log-maintenance.c \
 	log-pcap.c \
 	log-stats.c \
 	log-tcp-data.c \
@@ -944,6 +939,7 @@ libsuricata_c_a_SOURCES = \
 	output-json-ftp.c \
 	output-json-http.c \
 	output-json-ike.c \
+	output-json-llmnr.c \
 	output-json-mdns.c \
 	output-json-metadata.c \
 	output-json-mqtt.c \
@@ -1010,6 +1006,7 @@ libsuricata_c_a_SOURCES = \
 	thread-callbacks.c \
 	thread-storage.c \
 	threads.c \
+	threadvars.c \
 	tm-modules.c \
 	tm-queuehandlers.c \
 	tm-queues.c \
@@ -1086,6 +1083,7 @@ libsuricata_c_a_SOURCES = \
 	util-lua-http.c \
 	util-lua-ja3.c \
 	util-lua-log.c \
+	util-lua-ntp.c \
 	util-lua-packetlib.c \
 	util-lua-rule.c \
 	util-lua-sandbox.c \
@@ -1163,6 +1161,7 @@ EXTRA_DIST = \
 	${PRIVATE_INCLUDES} \
 	tests/stream-tcp-inline.c \
 	tests/stream-tcp-list.c \
+	tests/detect-etherhdr.c \
 	tests/detect-ipv4hdr.c \
 	tests/detect-ipv6hdr.c \
 	tests/detect-tcphdr.c \
@@ -1172,6 +1171,7 @@ EXTRA_DIST = \
 	tests/detect-http2.c \
 	tests/detect-icmpv6-mtu.c \
 	tests/detect-icmpv6hdr.c \
+	tests/detect-igmphdr.c \
 	tests/detect-template.c \
 	tests/detect-transform-pcrexform.c \
 	tests/detect-ttl.c \
@@ -1220,6 +1220,12 @@ install-headers:
 	fi
 	if test -e ../rust/gen/rust-bindings.h; then \
 		$(INSTALL_DATA) ../rust/gen/rust-bindings.h "$(DESTDIR)${includedir}/suricata"; \
+	fi
+	if test -e ../rust/dist/rust-ffi.h; then \
+		$(INSTALL_DATA) ../rust/dist/rust-ffi.h "$(DESTDIR)${includedir}/suricata"; \
+	fi
+	if test -e ../rust/gen/rust-ffi.h; then \
+		$(INSTALL_DATA) ../rust/gen/rust-ffi.h "$(DESTDIR)${includedir}/suricata"; \
 	fi
 
 # Until we can remove autoconf.h from our headers, we need to to
@@ -1303,7 +1309,7 @@ endif
 # force usage of CXX for linker
 nodist_EXTRA_fuzz_applayerparserparse_SOURCES = force-cxx-linking.cxx
 
-fuzz_siginit_SOURCES = tests/fuzz/fuzz_siginit.c
+fuzz_siginit_SOURCES = tests/fuzz/fuzz_siginit.c tests/fuzz/confyaml.c
 fuzz_siginit_LDFLAGS = $(LDFLAGS_FUZZ)
 fuzz_siginit_LDADD = $(LDADD_FUZZ)
 fuzz_siginit_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
@@ -1388,6 +1394,18 @@ else
 endif
 # force usage of CXX for linker
 nodist_EXTRA_fuzz_decodebase64_SOURCES = force-cxx-linking.cxx
+
+fuzz_iprep_SOURCES = tests/fuzz/fuzz_iprep.c
+fuzz_iprep_LDFLAGS = $(LDFLAGS_FUZZ)
+fuzz_iprep_LDADD = $(LDADD_FUZZ)
+fuzz_iprep_DEPENDENCIES = libsuricata_c.a $(RUST_SURICATA_LIB)
+if HAS_FUZZLDFLAGS
+    fuzz_iprep_LDFLAGS += $(LIB_FUZZING_ENGINE)
+else
+    fuzz_iprep_SOURCES += tests/fuzz/onefile.c
+endif
+# force usage of CXX for linker
+nodist_EXTRA_fuzz_iprep_SOURCES = force-cxx-linking.cxx
 
 fuzz_mimedecparseline_SOURCES = tests/fuzz/fuzz_mimedecparseline.c
 fuzz_mimedecparseline_LDFLAGS = $(LDFLAGS_FUZZ)

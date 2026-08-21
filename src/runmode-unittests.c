@@ -35,7 +35,6 @@
 #include "detect-engine-mpm.h"
 #include "detect-engine-sigorder.h"
 #include "detect-engine-payload.h"
-#include "detect-engine-dcepayload.h"
 #include "detect-engine-state.h"
 #include "detect-engine-tag.h"
 #include "detect-fast-pattern.h"
@@ -89,6 +88,7 @@
 #include "util-hashlist.h"
 #include "util-pool.h"
 #include "util-byte.h"
+#include "util-file.h"
 #include "util-proto-name.h"
 #include "util-macset.h"
 #include "util-flow-rate.h"
@@ -136,6 +136,7 @@ void TmqhSetup (void);
 static void RegisterUnittests(void)
 {
     UTHRegisterTests();
+    SCTimeRegisterTests();
     StreamTcpRegisterTests();
     SigRegisterTests();
     SCReputationRegisterTests();
@@ -167,6 +168,7 @@ static void RegisterUnittests(void)
     DecodeTCPRegisterTests();
     DecodeUDPV4RegisterTests();
     DecodeGRERegisterTests();
+    DecodeSCTPRegisterTests();
     DecodeESPRegisterTests();
     DecodeMPLSRegisterTests();
     DecodeNSHRegisterTests();
@@ -192,7 +194,6 @@ static void RegisterUnittests(void)
     SCThresholdConfRegisterTests();
     SCRConfRegisterTests();
     PayloadRegisterTests();
-    DcePayloadRegisterTests();
 #ifdef PROFILING
     SCProfilingRegisterTests();
 #endif
@@ -221,6 +222,7 @@ static void RegisterUnittests(void)
     SourceWinDivertRegisterTests();
 #endif
     SCProtoNameRegisterTests();
+    FileRegisterTests();
     UtilCIDRTests();
     OutputJsonStatsRegisterTests();
     CoredumpConfigRegisterTests();
@@ -248,7 +250,7 @@ void RunUnittests(int list_unittests, const char *regex_arg)
     MpmTableSetup();
     SpmTableSetup();
 
-    StorageInit();
+    SCStorageInit();
     AppLayerSetup();
 
     /* hardcoded initialization code */
@@ -269,7 +271,7 @@ void RunUnittests(int list_unittests, const char *regex_arg)
 
     HostBitInitCtx();
 
-    StorageFinalize();
+    SCStorageFinalize();
 
     AppLayerHtpEnableRequestBodyCallback();
     AppLayerHtpNeedFileInspection();

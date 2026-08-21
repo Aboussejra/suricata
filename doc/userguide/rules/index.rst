@@ -16,6 +16,7 @@ Suricata Rules
    file-keywords
    dns-keywords
    mdns-keywords
+   llmnr-keywords
    tls-keywords
    ssh-keywords
    ja-keywords
@@ -28,9 +29,11 @@ Suricata Rules
    kerberos-keywords
    smb-keywords
    snmp-keywords
+   ntp-keywords
    base64-keywords
    sip-keywords
    sdp-keywords
+   sctp-keywords
    rfb-keywords
    mqtt-keywords
    ike-keywords

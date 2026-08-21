@@ -36,7 +36,6 @@
 #include "runmodes.h"
 #include "runmode-af-xdp.h"
 #include "output.h"
-#include "log-httplog.h"
 #include "detect-engine-mpm.h"
 
 #include "alert-fastlog.h"
@@ -109,11 +108,11 @@ static TmEcode ConfigSetThreads(AFXDPIfaceConfig *aconf, const char *entry_str)
         SCReturnInt(TM_ECODE_FAILED);
     }
 
-    const int nr_queues = GetIfaceRSSQueuesNum(aconf->iface);
+    const uint16_t nr_queues = (uint16_t)GetIfaceRSSQueuesNum(aconf->iface);
 
     if (strcmp(entry_str, "auto") == 0) {
 
-        const int nr_cores = (int)UtilCpuGetNumProcessorsOnline();
+        const uint16_t nr_cores = UtilCpuGetNumProcessorsOnline();
 
         /* Threads limited to MIN(cores vs queues) */
         aconf->threads = (nr_cores <= nr_queues) ? nr_cores : nr_queues;
@@ -131,7 +130,7 @@ static TmEcode ConfigSetThreads(AFXDPIfaceConfig *aconf, const char *entry_str)
 
     if (aconf->threads > nr_queues) {
         SCLogWarning(
-                "Selected threads greater than configured queues, using: %d thread(s)", nr_queues);
+                "Selected threads greater than configured queues, using: %u thread(s)", nr_queues);
         aconf->threads = nr_queues;
     }
 
@@ -265,26 +264,26 @@ static void *ParseAFXDPConfig(const char *iface)
         if (SCConfGetChildValueIntWithDefault(
                     if_root, if_default, "busy-poll-time", &conf_val_int) == 1) {
             if (conf_val_int) {
-                aconf->busy_poll_time = conf_val_int;
+                aconf->busy_poll_time = (uint32_t)conf_val_int;
             }
         }
 
         if (SCConfGetChildValueIntWithDefault(
                     if_root, if_default, "busy-poll-budget", &conf_val_int) == 1) {
             if (conf_val_int) {
-                aconf->busy_poll_budget = conf_val_int;
+                aconf->busy_poll_budget = (uint32_t)conf_val_int;
             }
         }
 
         /* 0 value is valid for these Linux tunable's */
         if (SCConfGetChildValueIntWithDefault(
                     if_root, if_default, "gro-flush-timeout", &conf_val_int) == 1) {
-            aconf->gro_flush_timeout = conf_val_int;
+            aconf->gro_flush_timeout = (uint32_t)conf_val_int;
         }
 
         if (SCConfGetChildValueIntWithDefault(
                     if_root, if_default, "napi-defer-hard-irq", &conf_val_int) == 1) {
-            aconf->napi_defer_hard_irqs = conf_val_int;
+            aconf->napi_defer_hard_irqs = (uint32_t)conf_val_int;
         }
     }
 #endif

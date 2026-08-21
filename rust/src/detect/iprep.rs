@@ -69,16 +69,6 @@ pub struct DetectIPRepData {
     pub isnotset: bool, // if true, ignores `du8`
 }
 
-pub fn is_alphanumeric_or_slash(chr: char) -> bool {
-    if chr.is_ascii_alphanumeric() {
-        return true;
-    }
-    if chr == '_' || chr == '-' {
-        return true;
-    }
-    return false;
-}
-
 pub fn detect_parse_iprep(i: &str) -> IResult<&str, DetectIPRepData, RuleParseError<&str>> {
     // Inner utility function for easy error creation.
     fn make_error(reason: String) -> nom8::Err<RuleParseError<&'static str>> {
@@ -87,7 +77,8 @@ pub fn detect_parse_iprep(i: &str) -> IResult<&str, DetectIPRepData, RuleParseEr
     let (_, values) = nom8::multi::separated_list1(
         tag(","),
         preceded(multispace0, nom8::bytes::complete::is_not(",")),
-    ).parse(i)?;
+    )
+    .parse(i)?;
 
     let args = values.len();
     if args == 4 || args == 3 {
@@ -122,26 +113,43 @@ pub fn detect_parse_iprep(i: &str) -> IResult<&str, DetectIPRepData, RuleParseEr
                 arg2: 0,
                 mode,
             };
-            return Ok((i, DetectIPRepData { du8, cat, cmd, isnotset: false, }));
+            return Ok((
+                i,
+                DetectIPRepData {
+                    du8,
+                    cat,
+                    cmd,
+                    isnotset: false,
+                },
+            ));
         } else {
             let (isnotset, mode, arg1) = match values[2].trim() {
-                "isset" => { (false, DetectUintMode::DetectUintModeGte, 0) },
-                "isnotset" => { (true, DetectUintMode::DetectUintModeEqual, 0) },
-                _ => { return Err(make_error("invalid mode".to_string())); },
+                "isset" => (false, DetectUintMode::DetectUintModeGte, 0),
+                "isnotset" => (true, DetectUintMode::DetectUintModeEqual, 0),
+                _ => {
+                    return Err(make_error("invalid mode".to_string()));
+                }
             };
             let du8 = DetectUintData::<u8> {
                 arg1,
                 arg2: 0,
                 mode,
             };
-            return Ok((i, DetectIPRepData { du8, cat, cmd, isnotset, }));
+            return Ok((
+                i,
+                DetectIPRepData {
+                    du8,
+                    cat,
+                    cmd,
+                    isnotset,
+                },
+            ));
         }
     } else if args < 3 {
         return Err(make_error("too few arguments".to_string()));
-    } else  {
+    } else {
         return Err(make_error("too many arguments".to_string()));
     }
-
 }
 
 #[no_mangle]

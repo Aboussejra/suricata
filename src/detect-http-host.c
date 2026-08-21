@@ -83,6 +83,8 @@ static InspectionBuffer *GetRawData2(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f, const uint8_t _flow_flags, void *txv,
         const int list_id);
 static int g_http_host_buffer_id = 0;
+static int g_http2_thread_id = 0;
+static int g_http2_raw_thread_id = 0;
 
 /**
  * \brief Registers the keyword handlers for the "http_host" keyword.
@@ -92,8 +94,7 @@ void DetectHttpHHRegister(void)
     /* http_host content modifier */
     sigmatch_table[DETECT_HTTP_HOST_CM].name = "http_host";
     sigmatch_table[DETECT_HTTP_HOST_CM].desc = "content modifier to match on the HTTP hostname";
-    sigmatch_table[DETECT_HTTP_HOST_CM].url =
-            "/rules/http-keywords.html#http-host-and-http-raw-host";
+    // no doc url for this obsolete keyword, see http.host
     sigmatch_table[DETECT_HTTP_HOST_CM].Setup = DetectHttpHHSetup;
 #ifdef UNITTESTS
     sigmatch_table[DETECT_HTTP_HOST_CM].RegisterTests = DetectHttpHHRegisterTests;
@@ -104,7 +105,7 @@ void DetectHttpHHRegister(void)
     /* http.host sticky buffer */
     sigmatch_table[DETECT_HTTP_HOST].name = "http.host";
     sigmatch_table[DETECT_HTTP_HOST].desc = "sticky buffer to match on the HTTP Host buffer";
-    sigmatch_table[DETECT_HTTP_HOST].url = "/rules/http-keywords.html#http-host-and-http-raw-host";
+    sigmatch_table[DETECT_HTTP_HOST].url = "/rules/http-keywords.html#http-host";
     sigmatch_table[DETECT_HTTP_HOST].Setup = DetectHttpHostSetup;
     sigmatch_table[DETECT_HTTP_HOST].flags |= SIGMATCH_NOOPT|SIGMATCH_INFO_STICKY_BUFFER;
 
@@ -114,11 +115,12 @@ void DetectHttpHHRegister(void)
     DetectAppLayerMpmRegister("http_host", SIG_FLAG_TOSERVER, 2, PrefilterGenericMpmRegister,
             GetData, ALPROTO_HTTP1, HTP_REQUEST_PROGRESS_HEADERS);
 
-    DetectAppLayerInspectEngineRegister("http_host", ALPROTO_HTTP2, SIG_FLAG_TOSERVER,
-            HTTP2StateDataClient, DetectEngineInspectBufferGeneric, GetData2);
+    DetectAppLayerInspectEngineRegisterSubState("http_host", ALPROTO_HTTP2, SIG_FLAG_TOSERVER,
+            HTTP2TxTypeStream, HTTP2ProgHeaders, DetectEngineInspectBufferGeneric, GetData2);
 
-    DetectAppLayerMpmRegister("http_host", SIG_FLAG_TOSERVER, 2, PrefilterGenericMpmRegister,
-            GetData2, ALPROTO_HTTP2, HTTP2StateDataClient);
+    DetectAppLayerMpmRegisterSubState("http_host", SIG_FLAG_TOSERVER, 2,
+            PrefilterGenericMpmRegister, GetData2, ALPROTO_HTTP2, HTTP2TxTypeStream,
+            HTTP2ProgHeaders);
 
     DetectBufferTypeRegisterValidateCallback("http_host",
             DetectHttpHostValidateCallback);
@@ -126,14 +128,16 @@ void DetectHttpHHRegister(void)
     DetectBufferTypeSetDescriptionByName("http_host",
             "http host");
 
+    g_http2_thread_id = SCDetectRegisterThreadCtxGlobalFuncs(
+            "http_host", SCDetectThreadBufDataInit, NULL, SCDetectThreadBufDataFree);
+
     g_http_host_buffer_id = DetectBufferTypeGetByName("http_host");
 
     /* http_raw_host content modifier */
     sigmatch_table[DETECT_HTTP_RAW_HOST].name = "http_raw_host";
     sigmatch_table[DETECT_HTTP_RAW_HOST].desc = "content modifier to match on the HTTP host header "
                                                 "or the raw hostname from the HTTP uri";
-    sigmatch_table[DETECT_HTTP_RAW_HOST].url =
-            "/rules/http-keywords.html#http-host-and-http-raw-host";
+    // no doc url for this obsolete keyword, see http.host.raw
     sigmatch_table[DETECT_HTTP_RAW_HOST].Setup = DetectHttpHRHSetup;
     sigmatch_table[DETECT_HTTP_RAW_HOST].flags |= SIGMATCH_NOOPT | SIGMATCH_INFO_CONTENT_MODIFIER;
     sigmatch_table[DETECT_HTTP_RAW_HOST].alternative = DETECT_HTTP_HOST_RAW;
@@ -141,7 +145,7 @@ void DetectHttpHHRegister(void)
     /* http.host sticky buffer */
     sigmatch_table[DETECT_HTTP_HOST_RAW].name = "http.host.raw";
     sigmatch_table[DETECT_HTTP_HOST_RAW].desc = "sticky buffer to match on the HTTP host header or the raw hostname from the HTTP uri";
-    sigmatch_table[DETECT_HTTP_HOST_RAW].url = "/rules/http-keywords.html#http-host-and-http-raw-host";
+    sigmatch_table[DETECT_HTTP_HOST_RAW].url = "/rules/http-keywords.html#http-host-raw";
     sigmatch_table[DETECT_HTTP_HOST_RAW].Setup = DetectHttpHostRawSetupSticky;
     sigmatch_table[DETECT_HTTP_HOST_RAW].flags |= SIGMATCH_NOOPT|SIGMATCH_INFO_STICKY_BUFFER;
 
@@ -151,14 +155,18 @@ void DetectHttpHHRegister(void)
     DetectAppLayerMpmRegister("http_raw_host", SIG_FLAG_TOSERVER, 2, PrefilterGenericMpmRegister,
             GetRawData, ALPROTO_HTTP1, HTP_REQUEST_PROGRESS_HEADERS);
 
-    DetectAppLayerInspectEngineRegister("http_raw_host", ALPROTO_HTTP2, SIG_FLAG_TOSERVER,
-            HTTP2StateDataClient, DetectEngineInspectBufferGeneric, GetRawData2);
+    DetectAppLayerInspectEngineRegisterSubState("http_raw_host", ALPROTO_HTTP2, SIG_FLAG_TOSERVER,
+            HTTP2TxTypeStream, HTTP2ProgHeaders, DetectEngineInspectBufferGeneric, GetRawData2);
 
-    DetectAppLayerMpmRegister("http_raw_host", SIG_FLAG_TOSERVER, 2, PrefilterGenericMpmRegister,
-            GetRawData2, ALPROTO_HTTP2, HTTP2StateDataClient);
+    DetectAppLayerMpmRegisterSubState("http_raw_host", SIG_FLAG_TOSERVER, 2,
+            PrefilterGenericMpmRegister, GetRawData2, ALPROTO_HTTP2, HTTP2TxTypeStream,
+            HTTP2ProgHeaders);
 
     DetectBufferTypeSetDescriptionByName("http_raw_host",
             "http raw host header");
+
+    g_http2_raw_thread_id = SCDetectRegisterThreadCtxGlobalFuncs(
+            "http_raw_host", SCDetectThreadBufDataInit, NULL, SCDetectThreadBufDataFree);
 
     g_http_raw_host_buffer_id = DetectBufferTypeGetByName("http_raw_host");
 }
@@ -244,7 +252,7 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f,
         const uint8_t _flow_flags, void *txv, const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         htp_tx_t *tx = (htp_tx_t *)txv;
 
@@ -254,7 +262,7 @@ static InspectionBuffer *GetData(DetectEngineThreadCtx *det_ctx,
         const uint32_t data_len = (uint32_t)bstr_len(htp_tx_request_hostname(tx));
         const uint8_t *data = bstr_ptr(htp_tx_request_hostname(tx));
 
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, data, data_len, transforms);
     }
 
@@ -265,17 +273,19 @@ static InspectionBuffer *GetData2(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f, const uint8_t _flow_flags, void *txv,
         const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         uint32_t b_len = 0;
         const uint8_t *b = NULL;
-
-        if (SCHttp2TxGetHostNorm(txv, &b, &b_len) != 1)
+        void *thread_buf = SCDetectThreadCtxGetGlobalKeywordThreadCtx(det_ctx, g_http2_thread_id);
+        if (thread_buf == NULL)
+            return NULL;
+        if (SCHttp2TxGetHostNorm(txv, &b, &b_len, thread_buf) != 1)
             return NULL;
         if (b == NULL || b_len == 0)
             return NULL;
 
-        InspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
+        SCInspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
     }
 
     return buffer;
@@ -285,17 +295,21 @@ static InspectionBuffer *GetRawData2(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f, const uint8_t _flow_flags, void *txv,
         const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         uint32_t b_len = 0;
         const uint8_t *b = NULL;
+        void *thread_buf =
+                SCDetectThreadCtxGetGlobalKeywordThreadCtx(det_ctx, g_http2_raw_thread_id);
+        if (thread_buf == NULL)
+            return NULL;
 
-        if (SCHttp2TxGetHost(txv, &b, &b_len) != 1)
+        if (SCHttp2TxGetHost(txv, &b, &b_len, thread_buf) != 1)
             return NULL;
         if (b == NULL || b_len == 0)
             return NULL;
 
-        InspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
+        SCInspectionBufferSetupAndApplyTransforms(det_ctx, list_id, buffer, b, b_len, transforms);
     }
 
     return buffer;
@@ -342,7 +356,7 @@ static InspectionBuffer *GetRawData(DetectEngineThreadCtx *det_ctx,
         const DetectEngineTransforms *transforms, Flow *_f,
         const uint8_t _flow_flags, void *txv, const int list_id)
 {
-    InspectionBuffer *buffer = InspectionBufferGet(det_ctx, list_id);
+    InspectionBuffer *buffer = SCInspectionBufferGet(det_ctx, list_id);
     if (buffer->inspect == NULL) {
         htp_tx_t *tx = (htp_tx_t *)txv;
 
@@ -364,7 +378,7 @@ static InspectionBuffer *GetRawData(DetectEngineThreadCtx *det_ctx,
             data_len = (uint32_t)bstr_len(htp_uri_hostname(htp_tx_parsed_uri(tx)));
         }
 
-        InspectionBufferSetupAndApplyTransforms(
+        SCInspectionBufferSetupAndApplyTransforms(
                 det_ctx, list_id, buffer, data, data_len, transforms);
     }
 

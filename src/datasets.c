@@ -156,7 +156,7 @@ static int DatasetLoadIPv4(Dataset *set)
 int DatasetParseIpv6String(Dataset *set, const char *line, struct in6_addr *in6)
 {
     /* Checking IPv6 case */
-    char *got_colon = strchr(line, ':');
+    const char *got_colon = strchr(line, ':');
     if (got_colon) {
         uint32_t ip6addr[4];
         if (inet_pton(AF_INET6, line, in6) != 1) {
@@ -533,11 +533,7 @@ static bool DatasetIsStatic(const char *save, const char *load)
     /* A set is static if it does not have any dynamic properties like
      * save and/or state defined but has load defined.
      * */
-    if ((load != NULL && strlen(load) > 0) &&
-            (save == NULL || strlen(save) == 0)) {
-        return true;
-    }
-    return false;
+    return (load != NULL && strlen(load) > 0) && (save == NULL || strlen(save) == 0);
 }
 
 void DatasetReload(void)
@@ -599,7 +595,7 @@ void DatasetPostReloadCleanup(void)
 void DatasetGetDefaultMemcap(uint64_t *memcap, uint32_t *hashsize)
 {
     const char *str = NULL;
-    if (SCConfGet("datasets.defaults.memcap", &str) == 1) {
+    if (SCConfGetNonNull("datasets.defaults.memcap", &str) == 1) {
         if (ParseSizeStringU64(str, memcap) < 0) {
             SCLogWarning("memcap value cannot be deduced: %s,"
                          " resetting to default",
@@ -609,7 +605,7 @@ void DatasetGetDefaultMemcap(uint64_t *memcap, uint32_t *hashsize)
     }
 
     *hashsize = (uint32_t)DATASETS_HASHSIZE_DEFAULT;
-    if (SCConfGet("datasets.defaults.hashsize", &str) == 1) {
+    if (SCConfGetNonNull("datasets.defaults.hashsize", &str) == 1) {
         if (ParseSizeStringU32(str, hashsize) < 0) {
             *hashsize = (uint32_t)DATASETS_HASHSIZE_DEFAULT;
             SCLogWarning("hashsize value cannot be deduced: %s,"
@@ -628,12 +624,12 @@ int DatasetsInit(void)
     DatasetGetDefaultMemcap(&default_memcap, &default_hashsize);
     if (datasets != NULL) {
         const char *str = NULL;
-        if (SCConfGet("datasets.limits.total-hashsizes", &str) == 1) {
+        if (SCConfGetNonNull("datasets.limits.total-hashsizes", &str) == 1) {
             if (ParseSizeStringU32(str, &dataset_max_total_hashsize) < 0) {
                 FatalError("failed to parse datasets.limits.total-hashsizes value: %s", str);
             }
         }
-        if (SCConfGet("datasets.limits.single-hashsize", &str) == 1) {
+        if (SCConfGetNonNull("datasets.limits.single-hashsize", &str) == 1) {
             if (ParseSizeStringU32(str, &dataset_max_one_hashsize) < 0) {
                 FatalError("failed to parse datasets.limits.single-hashsize value: %s", str);
             }

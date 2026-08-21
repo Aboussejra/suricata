@@ -51,7 +51,6 @@ typedef struct OutputInitResult_ {
 typedef OutputInitResult (*OutputInitFunc)(SCConfNode *);
 typedef OutputInitResult (*OutputInitSubFunc)(SCConfNode *, OutputCtx *);
 typedef TmEcode (*OutputLogFunc)(ThreadVars *, Packet *, void *);
-typedef TmEcode (*OutputFlushFunc)(ThreadVars *, Packet *, void *);
 typedef uint32_t (*OutputGetActiveCountFunc)(void);
 
 typedef struct OutputModule_ {
@@ -66,7 +65,6 @@ typedef struct OutputModule_ {
     ThreadDeinitFunc ThreadDeinit;
 
     PacketLogger PacketLogFunc;
-    PacketLogger PacketFlushFunc;
     PacketLogCondition PacketConditionFunc;
     TxLogger TxLogFunc;
     TxLoggerCondition TxLogCondition;
@@ -76,6 +74,7 @@ typedef struct OutputModule_ {
     SCStreamingLogger StreamingLogFunc;
     StatsLogger StatsLogFunc;
     AppProto alproto;
+    uint8_t sub_state;
     enum SCOutputStreamingType stream_type;
     int tc_log_progress;
     int ts_log_progress;
@@ -86,7 +85,6 @@ typedef struct OutputModule_ {
 /* struct for packet module and packet sub-module registration */
 typedef struct OutputPacketLoggerFunctions_ {
     PacketLogger LogFunc;
-    PacketLogger FlushFunc;
     PacketLogCondition ConditionFunc;
     ThreadInitFunc ThreadInitFunc;
     ThreadDeinitFunc ThreadDeinitFunc;
@@ -124,6 +122,10 @@ void OutputRegisterTxSubModuleWithProgress(LoggerId id, const char *parent_name,
         const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto, TxLogger TxLogFunc,
         int tc_log_progress, int ts_log_progress, ThreadInitFunc ThreadInit,
         ThreadDeinitFunc ThreadDeinit);
+void OutputRegisterTxSubModuleWithProgressSubState(LoggerId id, const char *parent_name,
+        const char *name, const char *conf_name, OutputInitSubFunc InitFunc, AppProto alproto,
+        const uint8_t sub_state, TxLogger TxLogFunc, uint8_t tc_log_progress,
+        uint8_t ts_log_progress, ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit);
 
 void OutputRegisterFileSubModule(LoggerId id, const char *parent_name, const char *name,
         const char *conf_name, OutputInitSubFunc InitFunc, SCFileLogger FileLogFunc,
@@ -168,7 +170,6 @@ void OutputRegisterRootLogger(ThreadInitFunc ThreadInit, ThreadDeinitFunc Thread
 void TmModuleLoggerRegister(void);
 
 TmEcode OutputLoggerLog(ThreadVars *, Packet *, void *);
-TmEcode OutputLoggerFlush(ThreadVars *, Packet *, void *);
 TmEcode OutputLoggerThreadInit(ThreadVars *, const void *, void **);
 TmEcode OutputLoggerThreadDeinit(ThreadVars *, void *);
 void OutputLoggerExitPrintStats(ThreadVars *, void *);

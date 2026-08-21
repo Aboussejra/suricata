@@ -45,7 +45,6 @@
 #include "rust.h"
 
 #include "detect-engine-payload.h"
-#include "detect-engine-dcepayload.h"
 #include "detect-dns-name.h"
 #include "detect-dns-response.h"
 #include "detect-tls-sni.h"
@@ -70,7 +69,6 @@
 #include "detect-http-host.h"
 
 #include "detect-mark.h"
-#include "detect-nfs-version.h"
 
 #include "detect-engine-event.h"
 #include "decode.h"
@@ -154,9 +152,13 @@
 #include "detect-icmp-id.h"
 #include "detect-icmp-seq.h"
 #include "detect-icmpv4hdr.h"
-#include "detect-dce-iface.h"
-#include "detect-dce-opnum.h"
-#include "detect-dce-stub-data.h"
+#include "detect-igmphdr.h"
+#include "detect-igmp-type.h"
+#include "detect-sctphdr.h"
+#include "detect-sctp-chunk-type.h"
+#include "detect-sctp-chunk-cnt.h"
+#include "detect-sctp-vtag.h"
+#include "detect-sctp-chunk-data.h"
 #include "detect-urilen.h"
 #include "detect-bsize.h"
 #include "detect-detection-filter.h"
@@ -185,18 +187,14 @@
 #include "detect-geoip.h"
 #include "detect-app-layer-protocol.h"
 #include "detect-template.h"
-#include "detect-template2.h"
 #include "detect-tcphdr.h"
 #include "detect-tcpmss.h"
 #include "detect-udphdr.h"
+#include "detect-etherhdr.h"
 #include "detect-icmpv6hdr.h"
 #include "detect-icmpv6-mtu.h"
 #include "detect-ipv4hdr.h"
 #include "detect-ipv6hdr.h"
-#include "detect-krb5-cname.h"
-#include "detect-krb5-errcode.h"
-#include "detect-krb5-sname.h"
-#include "detect-krb5-ticket-encryption.h"
 #include "detect-sip-method.h"
 #include "detect-sip-uri.h"
 #include "detect-target.h"
@@ -229,7 +227,6 @@
 #include "detect-http-stat-code.h"
 #include "detect-ssl-version.h"
 #include "detect-ssl-state.h"
-#include "detect-modbus.h"
 #include "detect-dnp3.h"
 #include "detect-vlan.h"
 #include "detect-email.h"
@@ -332,6 +329,18 @@ static void PrintFeatureList(const SigTableElmt *e, char sep)
     } else {
         DEBUG_VALIDATE_BUG_ON(flags & (SIGMATCH_INFO_MULTI_UINT | SIGMATCH_INFO_ENUM_UINT |
                                               SIGMATCH_INFO_BITFLAGS_UINT));
+    }
+    if (flags & SIGMATCH_BAN_FIREWALL_RULE) {
+        if (prev == 1)
+            printf("%c", sep);
+        printf("banned from firewall rules");
+        prev = 1;
+    }
+    if (flags & SIGMATCH_BAN_FIREWALL_MODE) {
+        if (prev == 1)
+            printf("%c", sep);
+        printf("banned from firewall mode");
+        prev = 1;
     }
     if (e->Transform) {
         if (prev == 1)
@@ -579,7 +588,6 @@ void SigTableSetup(void)
 
     DetectDnsNameRegister();
     DetectDnsResponseRegister();
-    DetectModbusRegister();
     DetectDNP3Register();
 
     DetectTlsSniRegister();
@@ -664,14 +672,16 @@ void SigTableSetup(void)
     DetectIcmpIdRegister();
     DetectIcmpSeqRegister();
     DetectIcmpv4HdrRegister();
-    DetectDceIfaceRegister();
-    DetectDceOpnumRegister();
-    DetectDceStubDataRegister();
+    DetectIGMPHdrRegister();
+    DetectIGMPTypeRegister();
+    DetectSCTPHdrRegister();
+    DetectSCTPChunkTypeRegister();
+    DetectSCTPChunkCntRegister();
+    DetectSCTPVtagRegister();
+    DetectSCTPChunkDataRegister();
     DetectTlsRegister();
     DetectTlsValidityRegister();
     DetectTlsVersionRegister();
-    SCDetectNfsProcedureRegister();
-    DetectNfsVersionRegister();
     DetectUrilenRegister();
     DetectBsizeRegister();
     DetectDetectionFilterRegister();
@@ -687,7 +697,6 @@ void SigTableSetup(void)
     DetectBase64DecodeRegister();
     DetectBase64DataRegister();
     DetectTemplateRegister();
-    DetectTemplate2Register();
     DetectTcphdrRegister();
     DetectUdphdrRegister();
     DetectTcpmssRegister();
@@ -695,13 +704,9 @@ void SigTableSetup(void)
     DetectICMPv6hdrRegister();
     DetectICMPv6mtuRegister();
     DetectIPAddrBufferRegister();
+    DetectEtherhdrRegister();
     DetectIpv4hdrRegister();
     DetectIpv6hdrRegister();
-    DetectKrb5CNameRegister();
-    DetectKrb5ErrCodeRegister();
-    SCDetectKrb5MsgTypeRegister();
-    DetectKrb5SNameRegister();
-    DetectKrb5TicketEncryptionRegister();
     DetectSipMethodRegister();
     DetectSipUriRegister();
     DetectTargetRegister();
@@ -734,6 +739,7 @@ void SigTableSetup(void)
     DetectTransformLuaxformRegister();
     DetectTransformGunzipRegister();
     DetectTransformZlibDeflateRegister();
+    DetectTransformSubsliceRegister();
 
     DetectFileHandlerRegister();
 
@@ -758,6 +764,10 @@ void SigTableSetup(void)
     SCDetectQuicRegister();
     SCDetectSmbRegister();
     SCDetectIkeRegister();
+    SCDetectDcerpcRegister();
+    SCDetectKrb5Register();
+    SCDetectNfsRegister();
+    SCDetectModbusRegister();
 
     for (size_t i = 0; i < preregistered_callbacks_nb; i++) {
         PreregisteredCallbacks[i]();

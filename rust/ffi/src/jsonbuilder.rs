@@ -22,7 +22,8 @@
 use std::ffi::{CString, NulError};
 
 use suricata_sys::sys::{
-    SCJbClose, SCJbOpenObject, SCJbSetFormatted, SCJbSetString, SCJsonBuilder,
+    SCJbClose, SCJbGetMark, SCJbOpenObject, SCJbRestoreMark, SCJbSetFloat, SCJbSetFormatted,
+    SCJbSetInt, SCJbSetString, SCJbSetUint, SCJsonBuilder, SCJsonBuilderMark,
 };
 
 // TODO: Map suricata::jsonbuilder::JsonBuilder errors as well,
@@ -60,6 +61,23 @@ impl JsonBuilder {
         Self { jb }
     }
 
+    pub fn get_mark(&self) -> SCJsonBuilderMark {
+        let mut mark = SCJsonBuilderMark::default();
+        unsafe {
+            SCJbGetMark(self.jb, &mut mark);
+        }
+        mark
+    }
+
+    pub fn restore_mark(&mut self, mark: &SCJsonBuilderMark) -> Result<(), Error> {
+        let mut mark = *mark;
+        if unsafe { SCJbRestoreMark(self.jb, &mut mark) } {
+            Ok(())
+        } else {
+            Err(Error::Other)
+        }
+    }
+
     pub fn open_object(&mut self, key: &str) -> Result<&mut Self, Error> {
         let key = CString::new(key)?;
         if unsafe { SCJbOpenObject(self.jb, key.as_ptr()) } {
@@ -73,6 +91,33 @@ impl JsonBuilder {
         let key = CString::new(key)?;
         let val = CString::new(val.escape_default().to_string())?;
         if unsafe { SCJbSetString(self.jb, key.as_ptr(), val.as_ptr()) } {
+            Ok(self)
+        } else {
+            Err(Error::Other)
+        }
+    }
+
+    pub fn set_uint(&mut self, key: &str, val: u64) -> Result<&mut Self, Error> {
+        let key = CString::new(key)?;
+        if unsafe { SCJbSetUint(self.jb, key.as_ptr(), val) } {
+            Ok(self)
+        } else {
+            Err(Error::Other)
+        }
+    }
+
+    pub fn set_int(&mut self, key: &str, val: i64) -> Result<&mut Self, Error> {
+        let key = CString::new(key)?;
+        if unsafe { SCJbSetInt(self.jb, key.as_ptr(), val) } {
+            Ok(self)
+        } else {
+            Err(Error::Other)
+        }
+    }
+
+    pub fn set_float(&mut self, key: &str, val: f64) -> Result<&mut Self, Error> {
+        let key = CString::new(key)?;
+        if unsafe { SCJbSetFloat(self.jb, key.as_ptr(), val) } {
             Ok(self)
         } else {
             Err(Error::Other)

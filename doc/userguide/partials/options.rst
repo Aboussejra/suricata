@@ -103,7 +103,8 @@
 .. option:: --pcap-file-buffer-size <value>
 
    Set read buffer size using ``setvbuf`` to speed up pcap reading. Valid values
-   are 4 KiB to 64 MiB. Default value is 128 KiB. Supported on Linux only.
+   are 0, which disables ``setvbuf`` buffering, or 4 KiB to 64 MiB. Default
+   value is 128 KiB. Supported on Linux only.
 
 .. option::  -i <interface>
 
@@ -271,6 +272,14 @@
    List all supported run modes.
 
 .. Advanced options.
+
+.. option:: --plugin <path>
+
+   Load a plugin from *path* in addition to the plugins listed in the
+   configuration file. This option can be specified multiple times.
+
+   If *path* is a directory, Suricata will attempt to load each
+   ``.so`` file in that directory.
 
 .. option:: --set <key>=<value>
 

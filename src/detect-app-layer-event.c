@@ -122,9 +122,17 @@ static uint8_t DetectEngineAptEventInspect(DetectEngineCtx *de_ctx, DetectEngine
     if (r == 1) {
         return DETECT_ENGINE_INSPECT_SIG_MATCH;
     } else {
-        if (AppLayerParserGetStateProgress(f->proto, alproto, tx, flags) ==
-            AppLayerParserGetStateProgressCompletionStatus(alproto, flags))
-        {
+        AppLayerTxData *txd = AppLayerParserGetTxData(f->proto, alproto, tx);
+        uint8_t tx_end_state;
+        if (txd->tx_type == 0) {
+            tx_end_state = (uint8_t)AppLayerParserGetStateProgressCompletionStatus(alproto, flags);
+        } else {
+            if (flags & STREAM_TOSERVER)
+                tx_end_state = txd->tx_type_eop_ts;
+            else
+                tx_end_state = txd->tx_type_eop_tc;
+        }
+        if (AppLayerParserGetStateProgress(f->proto, alproto, tx, flags) == tx_end_state) {
             return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
         } else {
             return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
@@ -165,12 +173,9 @@ static DetectAppLayerEventData *DetectAppLayerEventParsePkt(const char *arg,
 
 static bool OutdatedEvent(const char *raw)
 {
-    if (strcmp(raw, "tls.certificate_missing_element") == 0 ||
-            strcmp(raw, "tls.certificate_unknown_element") == 0 ||
-            strcmp(raw, "tls.certificate_invalid_string") == 0) {
-        return true;
-    }
-    return false;
+    return strcmp(raw, "tls.certificate_missing_element") == 0 ||
+           strcmp(raw, "tls.certificate_unknown_element") == 0 ||
+           strcmp(raw, "tls.certificate_invalid_string") == 0;
 }
 
 static AppProto AppLayerEventGetProtoByName(char *alproto_name)
@@ -237,9 +242,9 @@ static int DetectAppLayerEventSetup(DetectEngineCtx *de_ctx, Signature *s, const
         }
 
         uint8_t ipproto = 0;
-        if (s->proto.proto[IPPROTO_TCP / 8] & 1 << (IPPROTO_TCP % 8)) {
+        if (DetectProtoContainsProto(&s->init_data->proto, IPPROTO_TCP)) {
             ipproto = IPPROTO_TCP;
-        } else if (s->proto.proto[IPPROTO_UDP / 8] & 1 << (IPPROTO_UDP % 8)) {
+        } else if (DetectProtoContainsProto(&s->init_data->proto, IPPROTO_UDP)) {
             ipproto = IPPROTO_UDP;
         } else {
             SCLogError("protocol %s is disabled", alproto_name);

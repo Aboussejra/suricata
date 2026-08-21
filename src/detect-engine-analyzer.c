@@ -57,6 +57,8 @@
 #include "util-var-name.h"
 #include "detect-icmp-id.h"
 #include "detect-tcp-window.h"
+#include "detect-app-layer-protocol.h"
+#include "app-layer-parser.h"
 
 static int rule_warnings_only = 0;
 
@@ -506,6 +508,7 @@ void SetupEngineAnalysis(DetectEngineCtx *de_ctx, bool *fp_analysis, bool *rule_
         if (ea->analyzer_items)
             SCFree(ea->analyzer_items);
         SCFree(ea);
+        de_ctx->ea = NULL;
     }
 }
 
@@ -780,6 +783,10 @@ static void DumpMatches(RuleAnalyzer *ctx, SCJsonBuilder *js, const SigMatchData
                     AnalyzerNote(ctx,
                             (char *)"'/B' (rawbytes) option is a no-op and is silently ignored");
                 }
+                if (cd->flags & DETECT_PCRE_HAS_UNICODE_CLUSTER) {
+                    AnalyzerNote(ctx, (char *)"pcre with \\X (Unicode extended grapheme cluster) "
+                                              "may be slow");
+                }
                 break;
             }
             case DETECT_BYTEJUMP: {
@@ -895,9 +902,6 @@ static void DumpMatches(RuleAnalyzer *ctx, SCJsonBuilder *js, const SigMatchData
                         break;
                     case DETECT_FLOWBITS_CMD_UNSET:
                         SCJbSetString(js, "cmd", "unset");
-                        break;
-                    case DETECT_FLOWBITS_CMD_TOGGLE:
-                        SCJbSetString(js, "cmd", "toggle");
                         break;
                 }
                 bool is_or = false;
@@ -1093,6 +1097,21 @@ static void DumpMatches(RuleAnalyzer *ctx, SCJsonBuilder *js, const SigMatchData
                         SCJbSetString(js, "dir", "both");
                         break;
                 }
+                SCJbClose(js);
+                break;
+            }
+            case DETECT_APP_LAYER_PROTOCOL: {
+                const DetectAppLayerProtocolData *ad = (const DetectAppLayerProtocolData *)smd->ctx;
+                SCJbOpenObject(js, "app_layer_protocol");
+                AppProto vals[256];
+                uint16_t n = DetectAppLayerProtocolGetValues(ad, vals, ARRAY_SIZE(vals));
+                SCJbOpenArray(js, "protocols");
+                for (uint16_t i = 0; i < n; i++) {
+                    SCJbAppendString(js, AppProtoToString(vals[i]));
+                }
+                SCJbClose(js);
+                SCJbSetString(js, "mode", DetectAppLayerProtocolModeName(ad->mode));
+                SCJbSetBool(js, "negated", ad->negated);
                 SCJbClose(js);
                 break;
             }
@@ -1442,6 +1461,9 @@ void EngineAnalysisRules2(const DetectEngineCtx *de_ctx, const Signature *s)
             SCJbSetBool(ctx.js, "is_mpm", app->mpm);
             SCJbSetString(ctx.js, "app_proto", AppProtoToString(app->alproto));
             SCJbSetUint(ctx.js, "progress", app->progress);
+            if (app->sub_state)
+                SCJbSetString(ctx.js, "sub_state",
+                        AppLayerParserGetSubStateName(app->alproto, app->sub_state));
 
             if (app->v2.transforms != NULL) {
                 SCJbOpenArray(ctx.js, "transforms");
@@ -1489,7 +1511,8 @@ void EngineAnalysisRules2(const DetectEngineCtx *de_ctx, const Signature *s)
         SCJbSetString(ctx.js, "buffer", name);
 
         SigMatchData *smd = pkt_mpm ? pkt_mpm->smd : app_mpm->smd;
-        if (smd == NULL && mpm_list == DETECT_SM_LIST_PMATCH) {
+        if (smd == NULL) {
+            DEBUG_VALIDATE_BUG_ON(mpm_list != DETECT_SM_LIST_PMATCH);
             smd = s->sm_arrays[mpm_list];
         }
         do {
@@ -1560,8 +1583,14 @@ void DumpPatterns(DetectEngineCtx *de_ctx)
         return;
 
     SCJsonBuilder *root_jb = SCJbNewObject();
-    SCJsonBuilder *arrays[de_ctx->buffer_type_id];
-    memset(&arrays, 0, sizeof(SCJsonBuilder *) * de_ctx->buffer_type_id);
+    if (root_jb == NULL) {
+        return;
+    }
+    SCJsonBuilder **arrays = SCCalloc(de_ctx->buffer_type_id, sizeof(SCJsonBuilder *));
+    if (arrays == NULL) {
+        SCJbFree(root_jb);
+        return;
+    }
 
     SCJbOpenArray(root_jb, "buffers");
 
@@ -1629,6 +1658,7 @@ void DumpPatterns(DetectEngineCtx *de_ctx)
     }
     SCMutexUnlock(&g_rules_analyzer_write_m);
     SCJbFree(root_jb);
+    SCFree(arrays);
 
     HashListTableFree(de_ctx->pattern_hash_table);
     de_ctx->pattern_hash_table = NULL;
@@ -1756,10 +1786,10 @@ void EngineAnalysisRules(const DetectEngineCtx *de_ctx,
         stream_buf += 1;
     }
 
-    if (s->proto.flags & DETECT_PROTO_IPV4) {
+    if (s->proto && s->proto->flags & DETECT_PROTO_IPV4) {
         rule_ipv4_only += 1;
     }
-    if (s->proto.flags & DETECT_PROTO_IPV6) {
+    if (s->proto && s->proto->flags & DETECT_PROTO_IPV6) {
         rule_ipv6_only += 1;
     }
 
@@ -1860,8 +1890,8 @@ void EngineAnalysisRules(const DetectEngineCtx *de_ctx,
     if (rule_content == 1) {
          //todo: warning if content is weak, separate warning for pcre + weak content
     }
-    if (rule_flow == 0 && rule_flags == 0 && !(s->proto.flags & DETECT_PROTO_ANY) &&
-            DetectProtoContainsProto(&s->proto, IPPROTO_TCP) &&
+    if (rule_flow == 0 && rule_flags == 0 && !(s->init_data->proto.flags & DETECT_PROTO_ANY) &&
+            DetectProtoContainsProto(&s->init_data->proto, IPPROTO_TCP) &&
             (rule_content || rule_content_http || rule_pcre || rule_pcre_http || rule_flowbits ||
                     rule_flowint)) {
         rule_warning += 1;
@@ -1914,7 +1944,8 @@ void EngineAnalysisRules(const DetectEngineCtx *de_ctx,
     }
 
     /* No warning about direction for ICMP protos */
-    if (!(DetectProtoContainsProto(&s->proto, IPPROTO_ICMPV6) && DetectProtoContainsProto(&s->proto, IPPROTO_ICMP))) {
+    if (!(DetectProtoContainsProto(&s->init_data->proto, IPPROTO_ICMPV6) &&
+                DetectProtoContainsProto(&s->init_data->proto, IPPROTO_ICMP))) {
         if ((s->flags & (SIG_FLAG_TOSERVER|SIG_FLAG_TOCLIENT)) == (SIG_FLAG_TOSERVER|SIG_FLAG_TOCLIENT)) {
             warn_both_direction += 1;
             rule_warning += 1;
@@ -2100,13 +2131,56 @@ void EngineAnalysisRules(const DetectEngineCtx *de_ctx,
 
 #include "app-layer-parser.h"
 
+static void AddPolicy(const DetectEngineCtx *de_ctx, RuleAnalyzer *ctx, const AppProto a,
+        const uint8_t sub_state, const uint8_t state, const uint8_t direction)
+{
+    char policy_string[64] = "";
+    const struct DetectFirewallPolicies *fw_policies = de_ctx->fw_policies;
+    const struct DetectFirewallAppPolicy lookup = {
+        .alproto = a, .sub_state = sub_state, .progress = state, .direction = direction
+    };
+    const struct DetectFirewallAppPolicy *ap =
+            HashTableLookup(fw_policies->app_policies, (void *)&lookup, 0);
+    if (ap == NULL)
+        return;
+    const struct DetectFirewallPolicy *p = &ap->policy;
+
+    const char *as = ActionScopeToString(p->action_scope);
+    DEBUG_VALIDATE_BUG_ON(as == NULL);
+    if (as == NULL)
+        return;
+    if (p->action & ACTION_REJECT_ANY) {
+        if (p->action & ACTION_REJECT_DST) {
+            snprintf(policy_string, sizeof(policy_string), "rejectdst:%s", as);
+        } else if (p->action & ACTION_REJECT_BOTH) {
+            snprintf(policy_string, sizeof(policy_string), "rejectboth:%s", as);
+        } else {
+            snprintf(policy_string, sizeof(policy_string), "rejectsrc:%s", as);
+        }
+    } else if (p->action & ACTION_DROP) {
+        snprintf(policy_string, sizeof(policy_string), "drop:%s", as);
+    } else if (p->action & ACTION_ACCEPT) {
+        snprintf(policy_string, sizeof(policy_string), "accept:%s", as);
+    } else {
+        DEBUG_VALIDATE_BUG_ON(1);
+    }
+    if (p->action & ACTION_PASS) {
+        if (p->action_scope == ACTION_SCOPE_FLOW) {
+            strlcat(policy_string, ",pass:flow", sizeof(policy_string));
+        } else {
+            DEBUG_VALIDATE_BUG_ON(1);
+        }
+    }
+    SCJbSetString(ctx->js, "policy", policy_string);
+}
+
 static void FirewallAddRulesForState(const DetectEngineCtx *de_ctx, const AppProto a,
-        const uint8_t state, const uint8_t direction, RuleAnalyzer *ctx)
+        const uint8_t sub_state, const uint8_t state, const uint8_t direction, RuleAnalyzer *ctx)
 {
     uint32_t accept_rules = 0;
-    SCJbSetString(ctx->js, "policy", "drop:flow");
+    AddPolicy(de_ctx, ctx, a, sub_state, state, direction);
     SCJbOpenArray(ctx->js, "rules");
-    for (Signature *s = de_ctx->sig_list; s != NULL; s = s->next) {
+    for (const Signature *s = de_ctx->sig_list; s != NULL; s = s->next) {
         if ((s->flags & SIG_FLAG_FIREWALL) == 0)
             break;
         if (s->type != SIG_TYPE_APP_TX)
@@ -2122,6 +2196,30 @@ static void FirewallAddRulesForState(const DetectEngineCtx *de_ctx, const AppPro
             if (s->flags & SIG_FLAG_TOSERVER) {
                 continue;
             }
+        }
+
+        /* sig has no sub_state field, so check the app inspect engines (if any).
+         * We assume that the only engines we have either:
+         * - are unknown/substate 0
+         * - matching the rule's substate */
+        if (s->app_inspect != NULL) {
+            bool skip_rule = false;
+            for (const DetectEngineAppInspectionEngine *engine = s->app_inspect; engine != NULL;
+                    engine = engine->next) {
+                if (engine->alproto == ALPROTO_UNKNOWN) {
+                    // skip engines targeting unknown, like stream or app-layer-event
+                } else if (engine->sub_state != sub_state) {
+                    skip_rule = true;
+                    break;
+                }
+            }
+            if (skip_rule) {
+                continue;
+            }
+        }
+        if ((s->flags & SIG_FLAG_FW_HOOK_LTE) && state < s->app_progress_hook) {
+            SCJbAppendString(ctx->js, s->sig_str);
+            accept_rules += ((s->action & ACTION_ACCEPT) != 0);
         }
 
         if (s->app_progress_hook == state) {
@@ -2178,21 +2276,76 @@ int FirewallAnalyzer(const DetectEngineCtx *de_ctx)
         if (!AppProtoIsValid(a))
             continue;
 
-        // HACK not all protocols have named states yet
-        const char *hack = AppLayerParserGetStateNameById(IPPROTO_TCP, a, 0, STREAM_TOSERVER);
-        if (!hack)
-            continue;
+        if (AppLayerParserSupportsSubStates(a)) {
+            SCJbOpenObject(ctx.js, AppProtoToString(a));
+            const uint8_t max_sub_state = AppLayerParserGetMaxSubState(a);
+            for (uint8_t sub_state = 1; sub_state <= max_sub_state; sub_state++) {
+                const char *sub_state_name = AppLayerParserGetSubStateName(a, sub_state);
+                const uint8_t max_progress = AppLayerParserGetSubStateCompletion(a, sub_state);
+                for (uint8_t state = 0; state <= max_progress; state++) {
+                    const char *name = AppLayerParserGetSubStateProgressName(
+                            a, sub_state, state, STREAM_TOSERVER);
+                    if (name == NULL)
+                        continue;
 
-        SCJbOpenObject(ctx.js, AppProtoToString(a));
+                    char table_name[256];
+                    snprintf(table_name, sizeof(table_name), "app:%s:%s:%s", AppProtoToString(a),
+                            sub_state_name, name);
+                    SCJbOpenObject(ctx.js, table_name);
+                    FirewallAddRulesForState(de_ctx, a, sub_state, state, STREAM_TOSERVER, &ctx);
+                    if (ctx.js_warnings) {
+                        SCJbClose(ctx.js_warnings);
+                        SCJbSetObject(ctx.js, "warnings", ctx.js_warnings);
+                        SCJbFree(ctx.js_warnings);
+                        ctx.js_warnings = NULL;
+                    }
+                    SCJbClose(ctx.js);
+                }
+                for (uint8_t state = 0; state <= max_progress; state++) {
+                    const char *name = AppLayerParserGetSubStateProgressName(
+                            a, sub_state, state, STREAM_TOCLIENT);
+                    if (name == NULL)
+                        continue;
+
+                    char table_name[256];
+                    snprintf(table_name, sizeof(table_name), "app:%s:%s:%s", AppProtoToString(a),
+                            sub_state_name, name);
+                    SCJbOpenObject(ctx.js, table_name);
+                    FirewallAddRulesForState(de_ctx, a, sub_state, state, STREAM_TOCLIENT, &ctx);
+                    if (ctx.js_warnings) {
+                        SCJbClose(ctx.js_warnings);
+                        SCJbSetObject(ctx.js, "warnings", ctx.js_warnings);
+                        SCJbFree(ctx.js_warnings);
+                        ctx.js_warnings = NULL;
+                    }
+                    SCJbClose(ctx.js);
+                }
+            }
+            SCJbClose(ctx.js); // app layer
+            continue;
+        }
+
+        /* no sub state follows */
+
         const uint8_t complete_state_ts =
                 (const uint8_t)AppLayerParserGetStateProgressCompletionStatus(a, STREAM_TOSERVER);
-        for (uint8_t state = 0; state < complete_state_ts; state++) {
+        SCJbOpenObject(ctx.js, AppProtoToString(a));
+        for (uint8_t state = 0; state <= complete_state_ts; state++) {
             const char *name =
                     AppLayerParserGetStateNameById(IPPROTO_TCP, a, state, STREAM_TOSERVER);
+            if (name == NULL) {
+                if (state == 0)
+                    name = "request-started";
+                else if (state == complete_state_ts)
+                    name = "request-complete";
+                else
+                    name = "unknown";
+            }
+
             char table_name[128];
             snprintf(table_name, sizeof(table_name), "app:%s:%s", AppProtoToString(a), name);
             SCJbOpenObject(ctx.js, table_name);
-            FirewallAddRulesForState(de_ctx, a, state, STREAM_TOSERVER, &ctx);
+            FirewallAddRulesForState(de_ctx, a, 0, state, STREAM_TOSERVER, &ctx);
             if (ctx.js_warnings) {
                 SCJbClose(ctx.js_warnings);
                 SCJbSetObject(ctx.js, "warnings", ctx.js_warnings);
@@ -2203,13 +2356,21 @@ int FirewallAnalyzer(const DetectEngineCtx *de_ctx)
         }
         const uint8_t complete_state_tc =
                 (const uint8_t)AppLayerParserGetStateProgressCompletionStatus(a, STREAM_TOCLIENT);
-        for (uint8_t state = 0; state < complete_state_tc; state++) {
+        for (uint8_t state = 0; state <= complete_state_tc; state++) {
             const char *name =
                     AppLayerParserGetStateNameById(IPPROTO_TCP, a, state, STREAM_TOCLIENT);
+            if (name == NULL) {
+                if (state == 0)
+                    name = "response-started";
+                else if (state == complete_state_tc)
+                    name = "response-complete";
+                else
+                    name = "unknown";
+            }
             char table_name[128];
             snprintf(table_name, sizeof(table_name), "app:%s:%s", AppProtoToString(a), name);
             SCJbOpenObject(ctx.js, table_name);
-            FirewallAddRulesForState(de_ctx, a, state, STREAM_TOCLIENT, &ctx);
+            FirewallAddRulesForState(de_ctx, a, 0, state, STREAM_TOCLIENT, &ctx);
             if (ctx.js_warnings) {
                 SCJbClose(ctx.js_warnings);
                 SCJbSetObject(ctx.js, "warnings", ctx.js_warnings);

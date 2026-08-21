@@ -267,9 +267,7 @@ static void *TcpSegmentPoolAlloc(void)
         return NULL;
     }
 
-    TcpSegment *seg = NULL;
-
-    seg = SCMalloc(sizeof (TcpSegment));
+    TcpSegment *seg = SCMalloc(sizeof(TcpSegment));
     if (unlikely(seg == NULL))
         return NULL;
 
@@ -283,22 +281,21 @@ static void *TcpSegmentPoolAlloc(void)
 
         seg->pcap_hdr_storage = SCCalloc(1, sizeof(TcpSegmentPcapHdrStorage));
         if (seg->pcap_hdr_storage == NULL) {
-            SCLogError("Unable to allocate memory for "
+            SCLogDebug("Unable to allocate memory for "
                        "TcpSegmentPcapHdrStorage");
             SCFree(seg);
             return NULL;
-        } else {
-            seg->pcap_hdr_storage->alloclen = sizeof(uint8_t) * TCPSEG_PKT_HDR_DEFAULT_SIZE;
-            seg->pcap_hdr_storage->pkt_hdr =
-                    SCCalloc(1, sizeof(uint8_t) * TCPSEG_PKT_HDR_DEFAULT_SIZE);
-            if (seg->pcap_hdr_storage->pkt_hdr == NULL) {
-                SCLogError("Unable to allocate memory for "
-                           "packet header data within "
-                           "TcpSegmentPcapHdrStorage");
-                SCFree(seg->pcap_hdr_storage);
-                SCFree(seg);
-                return NULL;
-            }
+        }
+
+        seg->pcap_hdr_storage->alloclen = sizeof(uint8_t) * TCPSEG_PKT_HDR_DEFAULT_SIZE;
+        seg->pcap_hdr_storage->pkt_hdr = SCCalloc(1, sizeof(uint8_t) * TCPSEG_PKT_HDR_DEFAULT_SIZE);
+        if (seg->pcap_hdr_storage->pkt_hdr == NULL) {
+            SCLogDebug("Unable to allocate memory for "
+                       "packet header data within "
+                       "TcpSegmentPcapHdrStorage");
+            SCFree(seg->pcap_hdr_storage);
+            SCFree(seg);
+            return NULL;
         }
 
         StreamTcpReassembleIncrMemuse(memuse);
@@ -309,7 +306,7 @@ static void *TcpSegmentPoolAlloc(void)
     return seg;
 }
 
-static int TcpSegmentPoolInit(void *data, void *initdata)
+static int TcpSegmentPoolInit(void *data)
 {
     TcpSegment *seg = (TcpSegment *) data;
     TcpSegmentPcapHdrStorage *pcap_hdr;
@@ -353,7 +350,7 @@ static void TcpSegmentPoolCleanup(void *ptr)
         return;
 
     TcpSegment *seg = (TcpSegment *)ptr;
-    if (seg && seg->pcap_hdr_storage) {
+    if (seg->pcap_hdr_storage) {
         if (seg->pcap_hdr_storage->pkt_hdr) {
             SCFree(seg->pcap_hdr_storage->pkt_hdr);
             StreamTcpReassembleDecrMemuse(seg->pcap_hdr_storage->alloclen);
@@ -567,12 +564,9 @@ TcpReassemblyThreadCtx *StreamTcpReassembleInitThreadCtx(ThreadVars *tv)
     SCMutexLock(&segment_thread_pool_mutex);
     if (segment_thread_pool == NULL) {
         segment_thread_pool = PoolThreadInit(1, /* thread */
-                0, /* unlimited */
-                stream_config.prealloc_segments,
-                sizeof(TcpSegment),
-                TcpSegmentPoolAlloc,
-                TcpSegmentPoolInit, NULL,
-                TcpSegmentPoolCleanup, NULL);
+                0,                              /* unlimited */
+                stream_config.prealloc_segments, sizeof(TcpSegment), TcpSegmentPoolAlloc,
+                TcpSegmentPoolInit, TcpSegmentPoolCleanup);
         ra_ctx->segment_thread_pool_id = 0;
         SCLogDebug("pool size %d, thread segment_thread_pool_id %d",
                 PoolThreadSize(segment_thread_pool),
@@ -634,7 +628,7 @@ bool StreamTcpReassembleDepthReached(Packet *p)
             stream = &ssn->server;
         }
 
-        return (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) ? true : false;
+        return (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) != 0;
     }
 
     return false;
@@ -1099,11 +1093,8 @@ static inline bool GapAhead(const TcpStream *stream, StreamingBufferBlock *cur_b
     StreamingBufferBlock *nblk = SBB_RB_NEXT(cur_blk);
     /* only if the stream has been ack'd, consider a gap for sure
      * otherwise there may still be a chance of pkts coming in */
-    if (nblk && (cur_blk->offset + cur_blk->len < nblk->offset) &&
-            GetAbsLastAck(stream) > (cur_blk->offset + cur_blk->len)) {
-        return true;
-    }
-    return false;
+    return nblk && (cur_blk->offset + cur_blk->len < nblk->offset) &&
+           GetAbsLastAck(stream) > (cur_blk->offset + cur_blk->len);
 }
 
 /** \internal
@@ -1581,8 +1572,8 @@ void StreamReassembleRawUpdateProgress(TcpSession *ssn, Packet *p, const uint64_
         stream->flags &= ~STREAMTCP_STREAM_FLAG_TRIGGER_RAW;
 
     } else {
-        SCLogDebug("PcapPacketCntGet(p) %" PRIu64 ": progress %" PRIu64 " app %" PRIu64
-                   " raw %" PRIu64 " tcp win %" PRIu32,
+        SCLogDebug("pcap_cnt %" PRIu64 ": progress %" PRIu64 " app %" PRIu64 " raw %" PRIu64
+                   " tcp win %" PRIu32,
                 PcapPacketCntGet(p), progress, STREAM_APP_PROGRESS(stream),
                 STREAM_RAW_PROGRESS(stream), stream->window);
     }
@@ -1878,6 +1869,12 @@ static int StreamReassembleRawDo(const TcpSession *ssn, const TcpStream *stream,
             progress = mydata_offset;
             SCLogDebug("raw progress now %"PRIu64, progress);
 
+            /* data is beyond the progress we'd like, and also beyond the last ack:
+             * there is a gap and we can't expect it to get filled anymore. */
+        } else if (mydata_offset > progress && mydata_offset == re) {
+            SCLogDebug("mydata_offset %" PRIu64 ", progress %" PRIu64 ", re %" PRIu64,
+                    mydata_offset, progress, re);
+            progress = re;
         } else {
             SCLogDebug("not increasing progress, data gap => mydata_offset "
                        "%"PRIu64" != progress %"PRIu64, mydata_offset, progress);
@@ -2124,7 +2121,6 @@ TcpSegment *StreamTcpGetSegment(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx)
     TcpSegment *seg = StreamTcpThreadCacheGetSegment();
     if (seg) {
         StatsCounterIncr(&tv->stats, ra_ctx->counter_tcp_segment_from_cache);
-        memset(&seg->sbseg, 0, sizeof(seg->sbseg));
         return seg;
     }
 

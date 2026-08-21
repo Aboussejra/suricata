@@ -51,12 +51,41 @@ static int mdns_answer_buffer_id = 0;
 static int mdns_authority_buffer_id = 0;
 static int mdns_additional_buffer_id = 0;
 
-static int DetectSetup(DetectEngineCtx *de_ctx, Signature *s, const char *str, int id)
+static int llmnr_query_buffer_id = 0;
+static int llmnr_answer_buffer_id = 0;
+static int llmnr_authority_buffer_id = 0;
+static int llmnr_additional_buffer_id = 0;
+
+static int DetectSetupDNS(DetectEngineCtx *de_ctx, Signature *s, const char *str, int id)
 {
     if (SCDetectBufferSetActiveList(de_ctx, s, id) < 0) {
         return -1;
     }
-    if (SCDetectSignatureSetAppProto(s, s->alproto) < 0) {
+    if (SCDetectSignatureSetAppProto(s, ALPROTO_DNS) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int DetectSetupMDNS(DetectEngineCtx *de_ctx, Signature *s, const char *str, int id)
+{
+    if (SCDetectBufferSetActiveList(de_ctx, s, id) < 0) {
+        return -1;
+    }
+    if (SCDetectSignatureSetAppProto(s, ALPROTO_MDNS) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int DetectSetupLLMNR(DetectEngineCtx *de_ctx, Signature *s, const char *str, int id)
+{
+    if (SCDetectBufferSetActiveList(de_ctx, s, id) < 0) {
+        return -1;
+    }
+    if (SCDetectSignatureSetAppProto(s, ALPROTO_LLMNR) < 0) {
         return -1;
     }
 
@@ -65,42 +94,62 @@ static int DetectSetup(DetectEngineCtx *de_ctx, Signature *s, const char *str, i
 
 static int SetupQueryBuffer(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, query_buffer_id);
+    return DetectSetupDNS(de_ctx, s, str, query_buffer_id);
 }
 
 static int SetupAnswerBuffer(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, answer_buffer_id);
+    return DetectSetupDNS(de_ctx, s, str, answer_buffer_id);
 }
 
 static int SetupAdditionalsBuffer(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, additional_buffer_id);
+    return DetectSetupDNS(de_ctx, s, str, additional_buffer_id);
 }
 
 static int SetupAuthoritiesBuffer(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, authority_buffer_id);
+    return DetectSetupDNS(de_ctx, s, str, authority_buffer_id);
 }
 
 static int SetupQueryBufferMdns(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, mdns_query_buffer_id);
+    return DetectSetupMDNS(de_ctx, s, str, mdns_query_buffer_id);
 }
 
 static int SetupAnswerBufferMdns(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, mdns_answer_buffer_id);
+    return DetectSetupMDNS(de_ctx, s, str, mdns_answer_buffer_id);
 }
 
 static int SetupAdditionalsBufferMdns(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, mdns_additional_buffer_id);
+    return DetectSetupMDNS(de_ctx, s, str, mdns_additional_buffer_id);
 }
 
 static int SetupAuthoritiesBufferMdns(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectSetup(de_ctx, s, str, mdns_authority_buffer_id);
+    return DetectSetupMDNS(de_ctx, s, str, mdns_authority_buffer_id);
+}
+
+static int SetupQueryBufferLlmnr(DetectEngineCtx *de_ctx, Signature *s, const char *str)
+{
+    return DetectSetupLLMNR(de_ctx, s, str, llmnr_query_buffer_id);
+}
+
+static int SetupAnswerBufferLlmnr(DetectEngineCtx *de_ctx, Signature *s, const char *str)
+{
+    return DetectSetupLLMNR(de_ctx, s, str, llmnr_answer_buffer_id);
+}
+
+static int SetupAdditionalsBufferLlmnr(DetectEngineCtx *de_ctx, Signature *s, const char *str)
+{
+    return DetectSetupLLMNR(de_ctx, s, str, llmnr_additional_buffer_id);
+}
+
+static int SetupAuthoritiesBufferLlmnr(DetectEngineCtx *de_ctx, Signature *s, const char *str)
+{
+    return DetectSetupLLMNR(de_ctx, s, str, llmnr_authority_buffer_id);
 }
 
 static int Register(const char *keyword, const char *desc, const char *doc,
@@ -124,27 +173,45 @@ static int Register(const char *keyword, const char *desc, const char *doc,
     return DetectBufferTypeGetByName(keyword);
 }
 
+/* helper to register the same buffer for DOH2 as we had for DNS, with their
+ * own alproto, substate and progress. But don't reregister the keyword itself. */
+static void RegisterDoh2(const char *keyword, InspectionMultiBufferGetDataPtr GetBufferFn)
+{
+    const AppProto alproto = ALPROTO_DOH2;
+    DetectAppLayerMultiRegisterSubState(keyword, alproto, SIG_FLAG_TOSERVER, HTTP2TxTypeStream,
+            HTTP2ProgClosed, GetBufferFn, 2);
+    DetectAppLayerMultiRegisterSubState(keyword, alproto, SIG_FLAG_TOCLIENT, HTTP2TxTypeStream,
+            HTTP2ProgClosed, GetBufferFn, 2);
+}
+
 void DetectDnsNameRegister(void)
 {
     query_buffer_id = Register("dns.queries.rrname", "DNS query rrname sticky buffer",
-            "/rules/dns-keywords.html#dns.queries.rrname", SetupQueryBuffer, SCDnsTxGetQueryName,
+            "/rules/dns-keywords.html#dns-queries-rrname", SetupQueryBuffer, SCDnsTxGetQueryName,
             ALPROTO_DNS);
+    RegisterDoh2("dns.queries.rrname", SCDnsTxGetQueryName);
+
     answer_buffer_id = Register("dns.answers.rrname", "DNS answer rrname sticky buffer",
-            "/rules/dns-keywords.html#dns.answers.rrname", SetupAnswerBuffer, SCDnsTxGetAnswerName,
+            "/rules/dns-keywords.html#dns-answers-rrname", SetupAnswerBuffer, SCDnsTxGetAnswerName,
             ALPROTO_DNS);
+    RegisterDoh2("dns.answers.rrname", SCDnsTxGetAnswerName);
+
     additional_buffer_id =
             Register("dns.additionals.rrname", "DNS additionals rrname sticky buffer",
                     "/rules/dns-keywords.html#dns-additionals-rrname", SetupAdditionalsBuffer,
                     SCDnsTxGetAdditionalName, ALPROTO_DNS);
+    RegisterDoh2("dns.additionals.rrname", SCDnsTxGetAdditionalName);
+
     authority_buffer_id = Register("dns.authorities.rrname", "DNS authorities rrname sticky buffer",
             "/rules/dns-keywords.html#dns-authorities-rrname", SetupAuthoritiesBuffer,
             SCDnsTxGetAuthorityName, ALPROTO_DNS);
+    RegisterDoh2("dns.authorities.rrname", SCDnsTxGetAuthorityName);
 
     mdns_query_buffer_id = Register("mdns.queries.rrname", "mDNS query rrname sticky buffer",
-            "/rules/mdns-keywords.html#mdns.queries.rrname", SetupQueryBufferMdns,
+            "/rules/mdns-keywords.html#mdns-queries-rrname", SetupQueryBufferMdns,
             SCDnsTxGetQueryName, ALPROTO_MDNS);
     mdns_answer_buffer_id = Register("mdns.answers.rrname", "mDNS answer rrname sticky buffer",
-            "/rules/mdns-keywords.html#mdns.answers.rrname", SetupAnswerBufferMdns,
+            "/rules/mdns-keywords.html#mdns-answers-rrname", SetupAnswerBufferMdns,
             SCMdnsTxGetAnswerName, ALPROTO_MDNS);
     mdns_additional_buffer_id =
             Register("mdns.additionals.rrname", "mDNS additionals rrname sticky buffer",
@@ -154,4 +221,19 @@ void DetectDnsNameRegister(void)
             Register("mdns.authorities.rrname", "mDNS authorities rrname sticky buffer",
                     "/rules/mdns-keywords.html#mdns-authorities-rrname", SetupAuthoritiesBufferMdns,
                     SCDnsTxGetAuthorityName, ALPROTO_MDNS);
+
+    llmnr_query_buffer_id = Register("llmnr.queries.rrname", "LLMNR query rrname sticky buffer",
+            "/rules/llmnr-keywords.html#llmnr-queries-rrname", SetupQueryBufferLlmnr,
+            SCDnsTxGetQueryName, ALPROTO_LLMNR);
+    llmnr_answer_buffer_id = Register("llmnr.answers.rrname", "LLMNR answer rrname sticky buffer",
+            "/rules/llmnr-keywords.html#llmnr-answers-rrname", SetupAnswerBufferLlmnr,
+            SCDnsTxGetAnswerName, ALPROTO_LLMNR);
+    llmnr_additional_buffer_id =
+            Register("llmnr.additionals.rrname", "LLMNR additionals rrname sticky buffer",
+                    "/rules/llmnr-keywords.html#llmnr-additionals-rrname",
+                    SetupAdditionalsBufferLlmnr, SCDnsTxGetAdditionalName, ALPROTO_LLMNR);
+    llmnr_authority_buffer_id =
+            Register("llmnr.authorities.rrname", "LLMNR authorities rrname sticky buffer",
+                    "/rules/llmnr-keywords.html#llmnr-authorities-rrname",
+                    SetupAuthoritiesBufferLlmnr, SCDnsTxGetAuthorityName, ALPROTO_LLMNR);
 }

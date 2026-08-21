@@ -18,8 +18,8 @@
 use crate::detect::SIGMATCH_NOOPT;
 use suricata_sys::sys::{
     DetectEngineCtx, DetectEngineThreadCtx, InspectionBuffer, SCDetectHelperTransformRegister,
-    SCDetectSignatureAddTransform, SCTransformTableElmt, Signature, SCInspectionBufferCheckAndExpand,
-    SCInspectionBufferTruncate,
+    SCDetectSignatureAddTransform, SCInspectionBufferCheckAndExpand, SCInspectionBufferInPlace,
+    SCInspectionBufferTruncate, SCTransformTableElmt, Signature,
 };
 
 use std::os::raw::{c_int, c_void};
@@ -43,23 +43,25 @@ fn dot_prefix_transform_do(input: &[u8], output: &mut [u8]) {
 }
 
 unsafe extern "C" fn dot_prefix_transform(
-    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *mut c_void,
+    _det: *mut DetectEngineThreadCtx, buffer: *mut InspectionBuffer, _ctx: *const c_void,
 ) {
     let input_len = (*buffer).inspect_len;
     if input_len == 0 {
         return;
     }
+    let inplace = SCInspectionBufferInPlace(buffer);
+
     let output = SCInspectionBufferCheckAndExpand(buffer, input_len + 1);
     if output.is_null() {
         // allocation failure
         return;
     }
-    // get input after possible realloc
-    let input = (*buffer).inspect;
-    if input.is_null() {
-        // allocation failure
-        return;
-    }
+    let input = if inplace {
+        // may have been reallocated
+        (*buffer).buf
+    } else {
+        (*buffer).inspect
+    };
     let input = build_slice!(input, input_len as usize);
     let output = std::slice::from_raw_parts_mut(output, (input_len + 1) as usize);
 

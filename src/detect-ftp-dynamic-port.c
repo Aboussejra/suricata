@@ -43,7 +43,7 @@
 #include "detect-ftp-dynamic-port.h"
 
 #define KEYWORD_NAME "ftp.dynamic_port"
-#define KEYWORD_DOC  "ftp-keywords.html#ftp-dynamic_port"
+#define KEYWORD_DOC  "ftp-keywords.html#ftp-dynamic-port"
 #define BUFFER_NAME  "ftp.dynamic_port"
 #define BUFFER_DESC  "ftp dynamic_port"
 
@@ -87,6 +87,8 @@ static int DetectFtpDynamicPortMatch(DetectEngineThreadCtx *det_ctx, Flow *f, ui
     FTPTransaction *tx = (FTPTransaction *)txv;
     if (tx->command_descriptor.command_code == FTP_COMMAND_UNKNOWN)
         return 0;
+    if (tx->dyn_port == 0)
+        return 0;
 
     const DetectU16Data *ftpd = (const DetectU16Data *)ctx;
 
@@ -103,14 +105,14 @@ void DetectFtpDynamicPortRegister(void)
     sigmatch_table[DETECT_FTP_DYNPORT].url = "/rules/" KEYWORD_DOC;
     sigmatch_table[DETECT_FTP_DYNPORT].Setup = DetectFtpDynamicPortSetup;
     sigmatch_table[DETECT_FTP_DYNPORT].Free = DetectFtpDynamicPortFree;
-    sigmatch_table[DETECT_FTP_DYNPORT].flags = SIGMATCH_INFO_UINT16;
+    sigmatch_table[DETECT_FTP_DYNPORT].flags = SIGMATCH_INFO_UINT16 | SIGMATCH_SUPPORT_FIREWALL;
     sigmatch_table[DETECT_FTP_DYNPORT].AppLayerTxMatch = DetectFtpDynamicPortMatch;
 
-    DetectAppLayerInspectEngineRegister(
-            BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOCLIENT, 0, DetectEngineInspectGenericList, NULL);
+    DetectAppLayerInspectEngineRegister(BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOCLIENT,
+            FTP_STATE_FINISHED, DetectEngineInspectGenericList, NULL);
 
-    DetectAppLayerInspectEngineRegister(
-            BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOSERVER, 0, DetectEngineInspectGenericList, NULL);
+    DetectAppLayerInspectEngineRegister(BUFFER_NAME, ALPROTO_FTP, SIG_FLAG_TOSERVER,
+            FTP_STATE_FINISHED, DetectEngineInspectGenericList, NULL);
 
     DetectBufferTypeSetDescriptionByName(BUFFER_NAME, BUFFER_DESC);
 

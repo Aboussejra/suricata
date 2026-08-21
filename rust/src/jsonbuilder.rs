@@ -172,7 +172,7 @@ impl JsonBuilder {
     // Reset the builder to its initial state, without losing
     // the current capacity.
     pub fn reset(&mut self) {
-        self.buf.truncate(0);
+        self.buf.clear();
         self.state.clear();
         match self.init_type {
             Type::Array => {
@@ -587,17 +587,17 @@ impl JsonBuilder {
                 b'\r' => {
                     self.push_str("\\r")?;
                 }
-                b'\n'=> {
+                b'\n' => {
                     self.push_str("\\n")?;
                 }
-                b'"'=> {
+                b'"' => {
                     self.push_str("\\\"")?;
                 }
-                b'\\'=> {
+                b'\\' => {
                     self.push_str("\\\\")?;
                 }
                 _ => {
-                    if !x.is_ascii() || x.is_ascii_control()  {
+                    if !x.is_ascii() || x.is_ascii_control() {
                         self.push('.')?;
                     } else {
                         self.push(x as char)?;
@@ -1219,11 +1219,11 @@ mod test {
     }
 
     #[test]
-    #[cfg(not(feature = "debug-validate"))]
     fn test_array_in_object() -> Result<(), JsonError> {
         let mut js = JsonBuilder::try_new_object().unwrap();
 
         // Attempt to add an item, should fail.
+        #[cfg(not(feature = "debug-validate"))]
         assert_eq!(
             js.append_string("will fail").err().unwrap(),
             JsonError::InvalidState
@@ -1618,6 +1618,4 @@ static ESCAPED: [u8; 256] = [
     __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, __, // F
 ];
 
-pub static HEX: [u8; 16] = [
-    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f',
-];
+pub static HEX: [u8; 16] = *b"0123456789abcdef";

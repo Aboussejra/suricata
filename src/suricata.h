@@ -111,22 +111,23 @@ enum EngineMode {
     ENGINE_MODE_FIREWALL,
 };
 
+/* Engine is acting as router */
+enum EngineHostMode {
+    ENGINE_HOST_IS_SNIFFER_ONLY,
+    ENGINE_HOST_IS_ROUTER,
+    ENGINE_HOST_IS_BRIDGE,
+};
+
 /* superset of IPS mode */
-void EngineModeSetFirewall(void);
-void EngineModeSetIPS(void);
+void EngineModeSetFirewall(const enum EngineHostMode);
+void EngineModeSetIPS(const enum EngineHostMode);
 void EngineModeSetIDS(void);
 int EngineModeIsUnknown(void);
 bool EngineModeIsFirewall(void);
 int EngineModeIsIPS(void);
 int EngineModeIsIDS(void);
-
-/* Box is acting as router */
-enum {
-    SURI_HOST_IS_SNIFFER_ONLY,
-    SURI_HOST_IS_ROUTER,
-};
-
-#define IS_SURI_HOST_MODE_SNIFFER_ONLY(host_mode) ((host_mode) == SURI_HOST_IS_SNIFFER_ONLY)
+bool EngineHostModeIsSniffer(void);
+bool EngineHostModeIsBridge(void);
 
 #include "runmodes.h"
 
@@ -176,6 +177,7 @@ typedef struct SCInstance_ {
     const char *progname; /**< pointer to argv[0] */
     const char *conf_filename;
     const char **additional_configs;
+    const char **additional_plugins;
     char *strict_rule_parsing_string;
 
     const char *capture_plugin_name;
@@ -232,7 +234,7 @@ int InitGlobal(void);
 void GlobalsDestroy(void);
 int PostConfLoadedSetup(SCInstance *suri);
 void PostConfLoadedDetectSetup(SCInstance *suri);
-int SCFinalizeRunMode(void);
+int SCFinalizeRunMode(int argc);
 TmEcode SCParseCommandLine(int argc, char **argv);
 int SCStartInternalRunMode(int argc, char **argv);
 TmEcode SCLoadYamlConfig(void);

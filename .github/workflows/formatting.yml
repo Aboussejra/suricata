@@ -27,15 +27,17 @@ jobs:
 
   # Checking for correct formatting of branch for C code changes
   check-formatting:
-    name: Formatting Check (clang 14)
-    runs-on: ubuntu-22.04
-    container: ubuntu:22.04
+    name: Formatting Check (clang 17)
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
     continue-on-error: false
+    env:
+      RV: "1.89"
     steps:
 
       # Cache Rust stuff.
       - name: Cache cargo registry
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cargo/registry
           key: cargo-registry
@@ -48,9 +50,9 @@ jobs:
                 build-essential \
                 autoconf \
                 automake \
-                cargo \
+                cargo-${RV} \
                 cbindgen \
-                clang-format-14 \
+                clang-format-17 \
                 git \
                 libtool \
                 libpcap-dev \
@@ -91,7 +93,7 @@ jobs:
       # My patience simply ran too short to keep on looking. See follow-on
       # action to manually fix this up.
       - name: Checkout - might be merge commit!
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
         # Use last commit of branch, not potential merge commit!
@@ -131,7 +133,7 @@ jobs:
           fi
         shell: bash {0}
       - run: ./autogen.sh
-      - run: ./configure --enable-warnings --enable-unittests
+      - run: PATH="/usr/lib/rust-${RV}/bin:$PATH" ./configure --enable-warnings --enable-unittests
       - name: Check formatting
         run: |
           ./scripts/clang-format.sh check-branch --diffstat --show-commits  >> check_formatting_log.txt 2>&1

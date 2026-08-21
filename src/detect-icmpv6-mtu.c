@@ -49,7 +49,7 @@ void DetectICMPv6mtuRegister(void)
 {
     sigmatch_table[DETECT_ICMPV6MTU].name = "icmpv6.mtu";
     sigmatch_table[DETECT_ICMPV6MTU].desc = "match on ICMPv6 MTU field";
-    sigmatch_table[DETECT_ICMPV6MTU].url = "/rules/header-keywords.html#icmpv6mtu";
+    sigmatch_table[DETECT_ICMPV6MTU].url = "/rules/header-keywords.html#icmpv6-mtu";
     sigmatch_table[DETECT_ICMPV6MTU].Match = DetectICMPv6mtuMatch;
     sigmatch_table[DETECT_ICMPV6MTU].Setup = DetectICMPv6mtuSetup;
     sigmatch_table[DETECT_ICMPV6MTU].Free = DetectICMPv6mtuFree;
@@ -123,7 +123,7 @@ static int DetectICMPv6mtuSetup (DetectEngineCtx *de_ctx, Signature *s, const ch
         return -1;
     }
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
-    s->proto.flags |= DETECT_PROTO_IPV6;
+    s->init_data->proto.flags |= DETECT_PROTO_IPV6;
 
     return 0;
 }

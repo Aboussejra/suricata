@@ -30,16 +30,35 @@
 #include "detect-parse.h"
 #include "detect-engine-content-inspection.h"
 #include "rust.h"
+#include "app-layer-parser.h"
+#include "util-validate.h"
 
-int SCDetectHelperBufferRegister(const char *name, AppProto alproto, uint8_t direction)
+int SCDetectHelperBufferProgressRegister(
+        const char *name, AppProto alproto, uint8_t direction, uint8_t progress)
 {
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto));
     if (direction & STREAM_TOSERVER) {
         DetectAppLayerInspectEngineRegister(
-                name, alproto, SIG_FLAG_TOSERVER, 0, DetectEngineInspectGenericList, NULL);
+                name, alproto, SIG_FLAG_TOSERVER, progress, DetectEngineInspectGenericList, NULL);
     }
     if (direction & STREAM_TOCLIENT) {
         DetectAppLayerInspectEngineRegister(
-                name, alproto, SIG_FLAG_TOCLIENT, 0, DetectEngineInspectGenericList, NULL);
+                name, alproto, SIG_FLAG_TOCLIENT, progress, DetectEngineInspectGenericList, NULL);
+    }
+    return DetectBufferTypeRegister(name);
+}
+
+int SCDetectHelperBufferProgressRegisterSubState(
+        const char *name, AppProto alproto, uint8_t direction, uint8_t sub_state, uint8_t progress)
+{
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto) && sub_state == 0);
+    if (direction & STREAM_TOSERVER) {
+        DetectAppLayerInspectEngineRegisterSubState(name, alproto, SIG_FLAG_TOSERVER, sub_state,
+                (uint8_t)progress, DetectEngineInspectGenericList, NULL);
+    }
+    if (direction & STREAM_TOCLIENT) {
+        DetectAppLayerInspectEngineRegisterSubState(name, alproto, SIG_FLAG_TOCLIENT, sub_state,
+                (uint8_t)progress, DetectEngineInspectGenericList, NULL);
     }
     return DetectBufferTypeRegister(name);
 }
@@ -47,6 +66,7 @@ int SCDetectHelperBufferRegister(const char *name, AppProto alproto, uint8_t dir
 int SCDetectHelperBufferMpmRegister(const char *name, const char *desc, AppProto alproto,
         uint8_t direction, InspectionSingleBufferGetDataPtr GetData)
 {
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto));
     if (direction & STREAM_TOSERVER) {
         DetectAppLayerInspectEngineRegisterSingle(
                 name, alproto, SIG_FLAG_TOSERVER, 0, DetectEngineInspectBufferSingle, GetData);
@@ -63,9 +83,30 @@ int SCDetectHelperBufferMpmRegister(const char *name, const char *desc, AppProto
     return DetectBufferTypeGetByName(name);
 }
 
-int SCDetectHelperBufferProgressMpmRegister(const char *name, const char *desc, AppProto alproto,
-        uint8_t direction, InspectionSingleBufferGetDataPtr GetData, int progress)
+int SCDetectRegisterMpmGeneric(const char *name, const char *desc, AppProto alproto,
+        uint8_t direction, InspectionBufferGetDataPtr GetData, uint8_t progress)
 {
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto));
+    if (direction & STREAM_TOSERVER) {
+        DetectAppLayerInspectEngineRegister(name, alproto, SIG_FLAG_TOSERVER, progress,
+                DetectEngineInspectBufferGeneric, GetData);
+        DetectAppLayerMpmRegister(name, SIG_FLAG_TOSERVER, 2, PrefilterGenericMpmRegister, GetData,
+                alproto, progress);
+    }
+    if (direction & STREAM_TOCLIENT) {
+        DetectAppLayerInspectEngineRegister(name, alproto, SIG_FLAG_TOCLIENT, progress,
+                DetectEngineInspectBufferGeneric, GetData);
+        DetectAppLayerMpmRegister(name, SIG_FLAG_TOCLIENT, 2, PrefilterGenericMpmRegister, GetData,
+                alproto, progress);
+    }
+    DetectBufferTypeSetDescriptionByName(name, desc);
+    return DetectBufferTypeGetByName(name);
+}
+
+int SCDetectHelperBufferProgressMpmRegister(const char *name, const char *desc, AppProto alproto,
+        uint8_t direction, InspectionSingleBufferGetDataPtr GetData, uint8_t progress)
+{
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto));
     if (direction & STREAM_TOSERVER) {
         DetectAppLayerInspectEngineRegisterSingle(name, alproto, SIG_FLAG_TOSERVER, progress,
                 DetectEngineInspectBufferSingle, GetData);
@@ -83,8 +124,10 @@ int SCDetectHelperBufferProgressMpmRegister(const char *name, const char *desc, 
 }
 
 int SCDetectHelperMultiBufferProgressMpmRegister(const char *name, const char *desc,
-        AppProto alproto, uint8_t direction, InspectionMultiBufferGetDataPtr GetData, int progress)
+        AppProto alproto, uint8_t direction, InspectionMultiBufferGetDataPtr GetData,
+        uint8_t progress)
 {
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto));
     if (direction & STREAM_TOSERVER) {
         DetectAppLayerMultiRegister(name, alproto, SIG_FLAG_TOSERVER, progress, GetData, 2);
     }
@@ -96,9 +139,28 @@ int SCDetectHelperMultiBufferProgressMpmRegister(const char *name, const char *d
     return DetectBufferTypeGetByName(name);
 }
 
+int SCDetectHelperMultiBufferProgressMpmRegisterSubState(const char *name, const char *desc,
+        AppProto alproto, uint8_t direction, InspectionMultiBufferGetDataPtr GetData,
+        uint8_t sub_state, uint8_t progress)
+{
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto) && sub_state == 0);
+    if (direction & STREAM_TOSERVER) {
+        DetectAppLayerMultiRegisterSubState(
+                name, alproto, SIG_FLAG_TOSERVER, sub_state, progress, GetData, 2);
+    }
+    if (direction & STREAM_TOCLIENT) {
+        DetectAppLayerMultiRegisterSubState(
+                name, alproto, SIG_FLAG_TOCLIENT, sub_state, progress, GetData, 2);
+    }
+    DetectBufferTypeSupportsMultiInstance(name);
+    DetectBufferTypeSetDescriptionByName(name, desc);
+    return DetectBufferTypeGetByName(name);
+}
+
 int SCDetectHelperMultiBufferMpmRegister(const char *name, const char *desc, AppProto alproto,
         uint8_t direction, InspectionMultiBufferGetDataPtr GetData)
 {
+    DEBUG_VALIDATE_BUG_ON(AppLayerParserSupportsSubStates(alproto));
     return SCDetectHelperMultiBufferProgressMpmRegister(name, desc, alproto, direction, GetData, 0);
 }
 
@@ -156,16 +218,13 @@ int SCDetectHelperTransformRegister(const SCTransformTableElmt *kw)
     sigmatch_table[transform_id].desc = kw->desc;
     sigmatch_table[transform_id].url = kw->url;
     sigmatch_table[transform_id].flags = kw->flags;
-    sigmatch_table[transform_id].Transform =
-            (void (*)(DetectEngineThreadCtx * det_ctx, InspectionBuffer * buffer, void *options))
-                    kw->Transform;
-    sigmatch_table[transform_id].TransformValidate = (bool (*)(
-            const uint8_t *content, uint16_t content_len, void *context))kw->TransformValidate;
+    sigmatch_table[transform_id].Transform = (void (*)(DetectEngineThreadCtx * det_ctx,
+            InspectionBuffer * buffer, const void *options)) kw->Transform;
+    sigmatch_table[transform_id].TransformValidate = kw->TransformValidate;
     sigmatch_table[transform_id].Setup =
             (int (*)(DetectEngineCtx * de, Signature * s, const char *raw)) kw->Setup;
     sigmatch_table[transform_id].Free = (void (*)(DetectEngineCtx * de, void *ptr)) kw->Free;
-    sigmatch_table[transform_id].TransformId =
-            (void (*)(const uint8_t **id_data, uint32_t *length, void *context))kw->TransformId;
+    sigmatch_table[transform_id].TransformId = kw->TransformId;
 
     return transform_id;
 }

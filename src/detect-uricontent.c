@@ -68,7 +68,7 @@ void DetectUricontentRegister (void)
 {
     sigmatch_table[DETECT_URICONTENT].name = "uricontent";
     sigmatch_table[DETECT_URICONTENT].desc = "legacy keyword to match on the request URI buffer";
-    sigmatch_table[DETECT_URICONTENT].url = "/rules/http-keywords.html#uricontent";
+    // No url doc for this obsolete keyword
     sigmatch_table[DETECT_URICONTENT].Match = NULL;
     sigmatch_table[DETECT_URICONTENT].Setup = DetectUricontentSetup;
     sigmatch_table[DETECT_URICONTENT].Free = DetectUricontentFree;
@@ -113,7 +113,7 @@ int DetectUricontentSetup(DetectEngineCtx *de_ctx, Signature *s, const char *con
     SCEnter();
 
     const char *legacy = NULL;
-    if (SCConfGet("legacy.uricontent", &legacy) == 1) {
+    if (SCConfGetNonNull("legacy.uricontent", &legacy) == 1) {
         if (strcasecmp("disabled", legacy) == 0) {
             SCLogError("uricontent deprecated.  To "
                        "use a rule with \"uricontent\", either set the "

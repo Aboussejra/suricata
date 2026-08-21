@@ -238,8 +238,9 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
         return true;
     }
 
-    FlowBypassInfo *fc = FlowGetStorageById(f, GetFlowBypassInfoID());
+    FlowBypassInfo *fc = SCFlowGetStorageById(f, GetFlowBypassInfoID());
     if (fc && fc->BypassUpdate) {
+        LiveDevice *dev = LiveDeviceGetById(f->livedev_id);
         /* flow will be possibly updated */
         uint64_t pkts_tosrc = fc->tosrcpktcnt;
         uint64_t bytes_tosrc = fc->tosrcbytecnt;
@@ -252,20 +253,19 @@ static inline bool FlowBypassedTimeout(Flow *f, SCTime_t ts, FlowTimeoutCounters
             bytes_tosrc = fc->tosrcbytecnt - bytes_tosrc;
             pkts_todst = fc->todstpktcnt - pkts_todst;
             bytes_todst = fc->todstbytecnt - bytes_todst;
-            if (f->livedev) {
-                SC_ATOMIC_ADD(f->livedev->bypassed,
-                        pkts_tosrc + pkts_todst);
+            if (dev) {
+                SC_ATOMIC_ADD(dev->bypassed, pkts_tosrc + pkts_todst);
             }
             counters->bypassed_pkts += pkts_tosrc + pkts_todst;
             counters->bypassed_bytes += bytes_tosrc + bytes_todst;
             return false;
         }
         SCLogDebug("No new packet, dead flow %" PRIu64 "", FlowGetId(f));
-        if (f->livedev) {
+        if (dev) {
             if (FLOW_IS_IPV4(f)) {
-                LiveDevSubBypassStats(f->livedev, 1, AF_INET);
+                LiveDevSubBypassStats(dev, 1, AF_INET);
             } else if (FLOW_IS_IPV6(f)) {
-                LiveDevSubBypassStats(f->livedev, 1, AF_INET6);
+                LiveDevSubBypassStats(dev, 1, AF_INET6);
             }
         }
         counters->bypassed_count++;
@@ -800,7 +800,9 @@ static void GetWorkUnitSizing(const uint32_t rows, const uint32_t mp, const bool
     }
     /* minimum busy score is 10 */
     const uint32_t emp = MAX(mp, 10);
-    const uint32_t rows_per_sec = (uint32_t)((float)rows * (float)((float)emp / (float)100));
+    /* ensure minimum rows_per_sec is at least 1 */
+    const uint32_t rows_per_sec =
+            MAX(1, (uint32_t)((float)rows * (float)((float)emp / (float)100)));
     /* calc how much time we estimate the work will take, in ms. We assume
      * each row takes an average of 1usec. Maxing out at 1sec. */
     const uint32_t work_per_unit = MIN(rows_per_sec / 1000, 1000);
@@ -955,7 +957,7 @@ static TmEcode FlowManager(ThreadVars *th_v, void *thread_data)
         if (other_last_sec == 0 || other_last_sec < (uint32_t)SCTIME_SECS(ts)) {
             if (ftd->instance == 0) {
                 StatsCounterSetI64(
-                        &th_v->stats, ftd->counter_defrag_memuse, DefragTrackerGetMemcap());
+                        &th_v->stats, ftd->counter_defrag_memuse, DefragTrackerGetMemuse());
                 uint32_t defrag_cnt = DefragTimeoutHash(ts);
                 if (defrag_cnt) {
                     StatsCounterAddI64(

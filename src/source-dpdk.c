@@ -431,7 +431,7 @@ static inline Packet *PacketInitFromMbuf(DPDKThreadVars *ptv, struct rte_mbuf *m
     p->dpdk_v.copy_mode = ptv->copy_mode;
     p->dpdk_v.out_port_id = ptv->out_port_id;
     p->dpdk_v.out_queue_id = ptv->queue_id;
-    p->livedev = ptv->livedev;
+    p->livedev_id = ptv->livedev->id;
 
     if (ptv->checksum_mode == CHECKSUM_VALIDATION_DISABLE) {
         p->flags |= PKT_IGNORE_CHECKSUM;
@@ -571,6 +571,9 @@ static TmEcode ReceiveDPDKLoop(ThreadVars *tv, void *data, void *slot)
     SCEnter();
     DPDKThreadVars *ptv = (DPDKThreadVars *)data;
     ptv->slot = ((TmSlot *)slot)->slot_next;
+    uint32_t mp_sz = ptv->livedev->dpdk_vars->pkt_mp[ptv->queue_id]->size;
+    uint16_t burst_size = (uint16_t)MIN(BURST_SIZE, mp_sz);
+
     TmEcode ret = ReceiveDPDKLoopInit(tv, ptv);
     if (ret != TM_ECODE_OK) {
         SCReturnInt(ret);
@@ -582,7 +585,7 @@ static TmEcode ReceiveDPDKLoop(ThreadVars *tv, void *data, void *slot)
         }
 
         uint16_t nb_rx =
-                rte_eth_rx_burst(ptv->port_id, ptv->queue_id, ptv->received_mbufs, BURST_SIZE);
+                rte_eth_rx_burst(ptv->port_id, ptv->queue_id, ptv->received_mbufs, burst_size);
         if (RXPacketCountHeuristic(tv, ptv, nb_rx)) {
             continue;
         }
@@ -640,7 +643,12 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
     ptv->tv = tv;
     ptv->pkts = 0;
     ptv->bytes = 0;
+
     ptv->livedev = LiveGetDevice(dpdk_config->iface);
+    if (unlikely(ptv->livedev == NULL)) {
+        SCLogError("Unable to allocate memory for livedev %s", dpdk_config->iface);
+        goto fail;
+    }
 
     ptv->capture_dpdk_packets = StatsRegisterCounter("capture.packets", &ptv->tv->stats);
     ptv->capture_dpdk_rx_errs = StatsRegisterCounter("capture.rx_errors", &ptv->tv->stats);
@@ -653,7 +661,7 @@ static TmEcode ReceiveDPDKThreadInit(ThreadVars *tv, const void *initdata, void 
     ptv->checksum_mode = dpdk_config->checksum_mode;
 
     ptv->threads = dpdk_config->threads;
-    ptv->intr_enabled = (dpdk_config->flags & DPDK_IRQ_MODE) ? true : false;
+    ptv->intr_enabled = (dpdk_config->flags & DPDK_IRQ_MODE) != 0;
     ptv->port_id = dpdk_config->port_id;
     ptv->out_port_id = dpdk_config->out_port_id;
     ptv->port_socket_id = dpdk_config->socket_id;

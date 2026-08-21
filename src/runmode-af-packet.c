@@ -37,7 +37,6 @@
 #include "runmodes.h"
 #include "runmode-af-packet.h"
 #include "output.h"
-#include "log-httplog.h"
 #include "detect-engine-mpm.h"
 
 #include "alert-fastlog.h"
@@ -125,7 +124,7 @@ static int AFPRunModeEnableIPS(void)
     bool r = AFPRunModeIsIPS();
     if (r) {
         SCLogInfo("Setting IPS mode");
-        EngineModeSetIPS();
+        EngineModeSetIPS(ENGINE_HOST_IS_BRIDGE);
     }
     return r;
 }

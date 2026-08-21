@@ -105,7 +105,8 @@ void DetectPcreRegister (void)
 #ifdef UNITTESTS
     sigmatch_table[DETECT_PCRE].RegisterTests  = DetectPcreRegisterTests;
 #endif
-    sigmatch_table[DETECT_PCRE].flags = (SIGMATCH_QUOTES_OPTIONAL|SIGMATCH_HANDLE_NEGATION);
+    sigmatch_table[DETECT_PCRE].flags =
+            (SIGMATCH_QUOTES_OPTIONAL | SIGMATCH_HANDLE_NEGATION | SIGMATCH_SUPPORT_FIREWALL);
 
     intmax_t val = 0;
 
@@ -365,6 +366,11 @@ static int DetectPcreSetList(int list, int set)
     return set;
 }
 
+static bool DetectPcreHasUnicodeCluster(const char *re)
+{
+    return strstr(re, "\\X") != NULL;
+}
+
 static int DetectPcreHasUpperCase(const char *re)
 {
     size_t len = strlen(re);
@@ -415,9 +421,9 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx,
     bool apply_match_limit = false;
 
     int cut_capture = 0;
-    char *fcap = strstr(regexstr, "flow:");
-    char *pcap = strstr(regexstr, "pkt:");
-    char *acap = strstr(regexstr, "alert:");
+    const char *fcap = strstr(regexstr, "flow:");
+    const char *pcap = strstr(regexstr, "pkt:");
+    const char *acap = strstr(regexstr, "alert:");
     /* take the size of the whole input as buffer size for the regex we will
      * extract below. Add 1 to please Coverity's alloc_strlen test. */
     size_t slen = strlen(regexstr) + 1;
@@ -469,6 +475,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx,
         }
     }
 
+    DEBUG_VALIDATE_BUG_ON(slen > UINT16_MAX);
     char re[slen];
 
     match = pcre2_match_data_create_from_pattern(parse_regex->regex, NULL);
@@ -707,6 +714,15 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx,
     if (capture_names == NULL || strlen(capture_names) == 0)
         opts |= PCRE2_NO_AUTO_CAPTURE;
 
+    // forbid use of \X Unicode extended grapheme cluster as slow
+    if (DetectPcreHasUnicodeCluster(re)) {
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+        goto error;
+#else
+        pd->flags |= DETECT_PCRE_HAS_UNICODE_CLUSTER;
+#endif
+    }
+
     pd->parse_regex.regex =
             pcre2_compile((PCRE2_SPTR8)re, PCRE2_ZERO_TERMINATED, opts, &en, &eo2, NULL);
     if (pd->parse_regex.regex == NULL && en == 115) { // reference to nonexistent subpattern
@@ -857,6 +873,7 @@ static int DetectPcreParseCapture(const char *regexstr, DetectEngineCtx *de_ctx,
     /* take the size of the whole input as buffer size for the string we will
      * extract below. Add 1 to please Coverity's alloc_strlen test. */
     size_t cap_buffer_len = strlen(regexstr) + 1;
+    DEBUG_VALIDATE_BUG_ON(cap_buffer_len > UINT16_MAX);
     char capture_str[cap_buffer_len];
     memset(capture_str, 0x00, cap_buffer_len);
 

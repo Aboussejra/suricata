@@ -1,5 +1,7 @@
 # Suricata Reserved SID Allocations
 
+See https://sidallocation.org/ for more information.
+
 Unless otherwise noted, each component or protocol is allocated 1000
 signature IDs.
 
@@ -8,6 +10,7 @@ signature IDs.
 | Component         | Start   | End     |
 | ----------------- | ------- | ------- |
 | Decoder           | 2200000 | 2200999 |
+| Firewall          | 2201000 | 2201999 |
 | Stream            | 2210000 | 2210999 |
 | Generic App-Layer | 2260000 | 2260999 |
 
@@ -29,9 +32,14 @@ signature IDs.
 | QUIC     | 2231000 | 2231999 |
 | FTP      | 2232000 | 2232999 |
 | POP3     | 2236000 | 2236999 |
+| LDAP     | 2237000 | 2237999 |
+| SNMP     | 2238000 | 2238999 |
+| SCTP     | 2239000 | 2239999 |
 | DNS      | 2240000 | 2240999 |
 | PGSQL    | 2241000 | 2241999 |
 | mDNS     | 2242000 | 2242999 |
+| Bittorent| 2243000 | 2243999 |
 | MODBUS   | 2250000 | 2250999 |
 | DNP3     | 2270000 | 2270999 |
+| SIP      | 2280000 | 2280999 |
 | HTTP2    | 2290000 | 2290999 |

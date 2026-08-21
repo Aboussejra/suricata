@@ -19,9 +19,9 @@
 
 use std::path::Path;
 
-use suricata_sys::sys::SCLogLevel;
 #[cfg(not(test))]
 use suricata_sys::sys::SCError;
+use suricata_sys::sys::SCLogLevel;
 
 pub static mut LEVEL: SCLogLevel = SCLogLevel::SC_LOG_NOTSET;
 
@@ -173,39 +173,6 @@ macro_rules!SCFatalErrorOnInit {
         suricata_ffi::debug::fatalerror(&format!($($arg)*));
     }
 }
-
-#[cfg(not(feature = "debug-validate"))]
-#[macro_export]
-macro_rules! debug_validate_bug_on (
-  ($item:expr) => {};
-);
-
-#[cfg(feature = "debug-validate")]
-#[macro_export]
-macro_rules! debug_validate_bug_on (
-  ($item:expr) => {
-    if $item {
-        panic!("Condition check failed");
-    }
-  };
-);
-
-#[cfg(not(feature = "debug-validate"))]
-#[macro_export]
-macro_rules! debug_validate_fail (
-  ($msg:expr) => {};
-);
-
-#[cfg(feature = "debug-validate")]
-#[macro_export]
-macro_rules! debug_validate_fail (
-  ($msg:expr) => {
-    // Wrap in a conditional to prevent unreachable code warning in caller.
-    if true {
-      panic!($msg);
-    }
-  };
-);
 
 #[macro_export]
 macro_rules! unwrap_or_return (

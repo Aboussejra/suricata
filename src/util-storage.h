@@ -41,35 +41,30 @@ typedef struct Storage {
     void *ptr;
 } Storage;
 
-void StorageInit(void);
-void StorageCleanup(void);
+void SCStorageInit(void);
+void SCStorageCleanup(void);
 
 /** \brief Register new storage
  *
  *  \param type type from StorageEnum
  *  \param name name
- *  \param size size of the per instance storage
- *  \param Alloc alloc function for per instance storage
  *  \param Free free function for per instance storage
- *
- *  \note if size == ptr size (so sizeof(void *)) and Alloc == NULL the API just
- *        gives the caller a ptr to store something it alloc'ed itself.
  */
-int StorageRegister(const StorageEnum type, const char *name, const unsigned int size, void *(*Alloc)(unsigned int), void (*Free)(void *));
-int StorageFinalize(void);
+int SCStorageRegister(const StorageEnum type, const char *name, void (*Free)(void *));
+int SCStorageFinalize(void);
 
-unsigned int StorageGetCnt(const StorageEnum type);
-unsigned int StorageGetSize(const StorageEnum type);
+unsigned int SCStorageGetCnt(const StorageEnum type);
+unsigned int SCStorageGetSize(const StorageEnum type);
 
 /** \brief get storage for id */
-void *StorageGetById(const Storage *storage, const StorageEnum type, const int id);
+void *SCStorageGetById(const Storage *storage, const StorageEnum type, const int id);
 /** \brief set storage for id */
-int StorageSetById(Storage *storage, const StorageEnum type, const int id, void *ptr);
+int SCStorageSetById(Storage *storage, const StorageEnum type, const int id, void *ptr);
 
 /** \brief AllocById func for prealloc'd base storage (storage ptrs are part
  *         of another memory block) */
-void *StorageAllocByIdPrealloc(Storage *storage, StorageEnum type, int id);
-void StorageFreeById(Storage *storage, const StorageEnum type, const int id);
-void StorageFreeAll(Storage *storage, const StorageEnum type);
+void *SCStorageAllocByIdPrealloc(Storage *storage, StorageEnum type, int id);
+void SCStorageFreeById(Storage *storage, const StorageEnum type, const int id);
+void SCStorageFreeAll(Storage *storage, const StorageEnum type);
 
 #endif

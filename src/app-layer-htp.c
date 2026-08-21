@@ -165,18 +165,12 @@ SCEnumCharMap http_decoder_event_table[] = {
             "CONTENT_LENGTH_EXTRA_DATA_END",
             HTP_LOG_CODE_CONTENT_LENGTH_EXTRA_DATA_END,
     },
-    {
-            "CONTENT_LENGTH_EXTRA_DATA_END",
-            HTP_LOG_CODE_CONTENT_LENGTH_EXTRA_DATA_END,
-    },
     { "SWITCHING_PROTO_WITH_CONTENT_LENGTH", HTP_LOG_CODE_SWITCHING_PROTO_WITH_CONTENT_LENGTH },
     { "DEFORMED_EOL", HTP_LOG_CODE_DEFORMED_EOL },
     { "PARSER_STATE_ERROR", HTP_LOG_CODE_PARSER_STATE_ERROR },
     { "MISSING_OUTBOUND_TRANSACTION_DATA", HTP_LOG_CODE_MISSING_OUTBOUND_TRANSACTION_DATA },
     { "MISSING_INBOUND_TRANSACTION_DATA", HTP_LOG_CODE_MISSING_INBOUND_TRANSACTION_DATA },
-    { "MISSING_INBOUND_TRANSACTION_DATA", HTP_LOG_CODE_MISSING_INBOUND_TRANSACTION_DATA },
     { "ZERO_LENGTH_DATA_CHUNKS", HTP_LOG_CODE_ZERO_LENGTH_DATA_CHUNKS },
-    { "REQUEST_LINE_UNKNOWN_METHOD", HTP_LOG_CODE_REQUEST_LINE_UNKNOWN_METHOD },
     { "REQUEST_LINE_UNKNOWN_METHOD", HTP_LOG_CODE_REQUEST_LINE_UNKNOWN_METHOD },
     { "REQUEST_LINE_UNKNOWN_METHOD_NO_PROTOCOL",
             HTP_LOG_CODE_REQUEST_LINE_UNKNOWN_METHOD_NO_PROTOCOL },
@@ -202,6 +196,7 @@ SCEnumCharMap http_decoder_event_table[] = {
 
     { "LZMA_MEMLIMIT_REACHED", HTP_LOG_CODE_LZMA_MEMLIMIT_REACHED },
     { "COMPRESSION_BOMB", HTP_LOG_CODE_COMPRESSION_BOMB },
+    { "COMPRESSION_BOMB_LIMIT_REACHED", HTP_LOG_CODE_COMPRESSION_BOMB_LIMIT_REACHED },
 
     { "REQUEST_TOO_MANY_HEADERS", HTP_LOG_CODE_REQUEST_TOO_MANY_HEADERS },
     { "RESPONSE_TOO_MANY_HEADERS", HTP_LOG_CODE_RESPONSE_TOO_MANY_HEADERS },
@@ -750,7 +745,7 @@ static int Setup(Flow *f, HtpState *hstate)
 
     if (NULL == htp) {
 #ifdef DEBUG_VALIDATION
-        BUG_ON(htp == NULL);
+        BUG_ON(1);
 #endif
         /* should never happen if HTPConfigure is properly invoked */
         goto error;
@@ -1270,7 +1265,11 @@ static int HtpResponseBodyHandle(HtpState *hstate, HtpTxUserData *htud, const ht
      * we check for htp_tx_response_line(tx) in case of junk
      * interpreted as body before response line
      */
-    if (!(htud->tcflags & HTP_FILENAME_SET)) {
+    if (!(htud->tcflags & HTP_RESP_BODY_SEEN)) {
+        // make sure we run this only once per tx
+        // so that we do not retry/refail to parse Content-Disposition header
+        // which may be expensive if we do it for every packet...
+        htud->tcflags |= HTP_RESP_BODY_SEEN;
         SCLogDebug("setting up file name");
 
         const uint8_t *filename = NULL;
@@ -2224,6 +2223,20 @@ static void HTPConfigParseParameters(HTPCfgRec *cfg_prec, SCConfNode *s, struct 
                 SCLogConfig("Setting HTTP LZMA decompression layers to %" PRIu32 "", (int)limit);
                 htp_config_set_lzma_layers(cfg_prec->cfg, limit);
             }
+        } else if (strcasecmp("compression-bomb-count", p->name) == 0) {
+            uint8_t limit = 0;
+            if (ParseSizeStringU8(p->val, &limit) < 0) {
+                FatalError("failed to parse 'compression-bomb-count' "
+                           "from conf file - %s.",
+                        p->val);
+            }
+            if (limit == 0) {
+                FatalError("'compression-bomb-count' "
+                           "from conf file cannot be 0.");
+            }
+            /* set default soft-limit with our new hard limit */
+            SCLogConfig("Setting HTTP compression bomb count limit to %" PRIu8, limit);
+            htp_config_set_max_nb_compression_bombs(cfg_prec->cfg, (size_t)limit);
         } else if (strcasecmp("compression-bomb-limit", p->name) == 0) {
             uint32_t limit = 0;
             if (ParseSizeStringU32(p->val, &limit) < 0) {
@@ -2504,7 +2517,7 @@ static AppLayerGetTxIterTuple HTPGetTxIterator(const uint8_t ipproto, const AppP
             AppLayerGetTxIterTuple tuple = {
                 .tx_ptr = tx,
                 .tx_id = tx_id,
-                .has_next = state->un.u64 < size,
+                .has_next = (tx_id + 1) < size,
             };
             return tuple;
         }

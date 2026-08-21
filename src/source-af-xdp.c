@@ -423,7 +423,7 @@ static TmEcode ConfigureBusyPolling(AFXDPThreadVars *ptv)
 
 static void AFXDPSwitchState(AFXDPThreadVars *ptv, int state)
 {
-    ptv->afxdp_state = state;
+    ptv->afxdp_state = (uint8_t)state;
 }
 
 static TmEcode OpenXSKSocket(AFXDPThreadVars *ptv)
@@ -791,7 +791,7 @@ static TmEcode ReceiveAFXDPLoop(ThreadVars *tv, void *data, void *slot)
 
             PKT_SET_SRC(p, PKT_SRC_WIRE);
             p->datalink = LINKTYPE_ETHERNET;
-            p->livedev = ptv->livedev;
+            p->livedev_id = ptv->livedev->id;
             p->ReleasePacket = AFXDPReleasePacket;
             p->flags |= PKT_IGNORE_CHECKSUM;
 

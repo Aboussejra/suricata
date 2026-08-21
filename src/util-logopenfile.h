@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2021 Open Information Security Foundation
+/* Copyright (C) 2007-2026 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -68,6 +68,11 @@ typedef struct LogFileTypeCtx_ {
     void *thread_data;
 } LogFileTypeCtx;
 
+typedef struct LogFileEntry_ {
+    struct LogFileCtx_ *ctx;
+    TAILQ_ENTRY(LogFileEntry_) entries;
+} LogFileEntry;
+
 /** Global structure for Output Context */
 typedef struct LogFileCtx_ {
     union {
@@ -87,6 +92,7 @@ typedef struct LogFileCtx_ {
     int (*Write)(const char *buffer, int buffer_len, struct LogFileCtx_ *fp);
     void (*Close)(struct LogFileCtx_ *fp);
     void (*Flush)(struct LogFileCtx_ *fp);
+    void (*Rotate)(struct LogFileCtx_ *fp);
 
     LogFileTypeCtx filetype;
 
@@ -146,11 +152,14 @@ typedef struct LogFileCtx_ {
      * allow for rotation. */
     uint8_t is_regular;
 
-    /* JSON flags */
-    size_t json_flags;  /* passed to json_dump_callback() */
+    /* Compress ipv6 addresses? */
+    bool compress_ipv6;
 
     /* Flag set when file rotation notification is received. */
     int rotation_flag;
+
+    /* JSON flags */
+    size_t json_flags; /* passed to json_dump_callback() */
 
     /* if set to true EVE will add a pcap file record */
     bool is_pcap_offline;
@@ -183,5 +192,11 @@ LogFileCtx *LogFileEnsureExists(ThreadId thread_id, LogFileCtx *lf_ctx);
 int SCConfLogOpenGeneric(SCConfNode *conf, LogFileCtx *, const char *, int);
 int SCConfLogReopen(LogFileCtx *);
 bool SCLogOpenThreadedFile(const char *log_path, const char *append, LogFileCtx *parent_ctx);
+
+/* Log file list management functions */
+void LogFileRegister(LogFileCtx *ctx);
+void LogFileUnregister(LogFileCtx *ctx);
+void LogFileFlushAll(void);
+void LogFileRotateAll(void);
 
 #endif /* SURICATA_UTIL_LOGOPENFILE_H */
